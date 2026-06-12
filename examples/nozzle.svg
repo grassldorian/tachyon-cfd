@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
+  <!-- RocketCFD example engine as SVG.
+       black stroke = walls, white = flow space, blue = pressure inlet.
+       Geometry is symmetric about y=500 (the axisymmetric solver axis). -->
+  <rect x="0" y="0" width="1000" height="1000" fill="white"/>
+  <!-- engine wall: one continuous stroke from exit lip around the chamber
+       back wall to the opposite exit lip -->
+  <path d="M 800,350
+           C 660,410 540,470 470,474
+           C 445,458 420,390 350,390
+           L 100,390
+           L 100,610
+           L 350,610
+           C 420,610 445,542 470,526
+           C 540,530 660,590 800,650"
+        fill="none" stroke="black" stroke-width="8"
+        stroke-linejoin="round" stroke-linecap="round"/>
+  <!-- pressure inlet (chamber back wall / injector face) -->
+  <rect x="104" y="420" width="10" height="160" fill="rgb(0,80,255)"/>
+</svg>

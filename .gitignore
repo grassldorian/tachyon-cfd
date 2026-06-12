@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# build artifacts
+build/
+dist/
+installer_out/
+*.spec.bak
+
+# runtime caches / results
+.cupy_cache/
+results_*/
+*.npz
+gui_round*.png
+
+# user engine library (drawings made in the designer)
+engines/
+
+# local tooling
+.claude/
+*.log
