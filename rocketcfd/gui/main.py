@@ -1408,7 +1408,7 @@ class MainWindow(QMainWindow):
 # ---- GUI color schemes -----------------------------------------------------
 # Each palette is a flat dict of named colors consumed by build_qss / the
 # pyqtgraph widgets. ``is_dark`` only selects the light/dark logo variant.
-# Claude warm light + dark (terracotta accent) are the originals; Mono,
+# Light + Dark (warm surfaces, terracotta accent) are the originals; Mono,
 # Blueprint and Midnight are the alternative schemes offered in the toolbar.
 LIGHT_COLORS = dict(
     bg="#FAF9F5", panel="#F0EEE5", card="#FFFFFF",
@@ -1461,8 +1461,8 @@ MIDNIGHT_COLORS = dict(
 
 # Ordered registry the toolbar picker iterates over (display name -> palette).
 THEMES = {
-    "Claude Light": LIGHT_COLORS,
-    "Claude Dark": DARK_COLORS,
+    "Light": LIGHT_COLORS,
+    "Dark": DARK_COLORS,
     "Mono (B&W)": MONO_COLORS,
     "Blueprint": BLUEPRINT_COLORS,
     "Midnight": MIDNIGHT_COLORS,
@@ -1471,7 +1471,7 @@ THEMES = {
 # module-level so MainWindow can read the active palette
 ACTIVE_COLORS = dict(LIGHT_COLORS)
 ACTIVE_DARK = [False]                 # mutable: set by apply_claude_theme
-ACTIVE_THEME = ["Claude Light"]       # mutable: current theme name
+ACTIVE_THEME = ["Light"]              # mutable: current theme name
 
 # kept for back-compat with the QSS template below
 C_BG      = "{bg}"
@@ -1583,19 +1583,19 @@ def _resolve_theme(theme):
     if isinstance(theme, dict):
         return ACTIVE_THEME[0], theme
     if isinstance(theme, bool):                       # legacy dark=True/False
-        name = "Claude Dark" if theme else "Claude Light"
+        name = "Dark" if theme else "Light"
         return name, THEMES[name]
     if isinstance(theme, str) and theme in THEMES:
         return theme, THEMES[theme]
-    return "Claude Light", THEMES["Claude Light"]
+    return "Light", THEMES["Light"]
 
 
 def apply_claude_theme(app: QApplication, theme=None, *, dark=None):
     """Apply a color scheme. ``theme`` is a THEMES name, a palette dict, or a
-    legacy bool (True=Claude Dark, False=Claude Light). The legacy ``dark=``
-    keyword is still accepted."""
+    legacy bool (True=Dark, False=Light). The legacy ``dark=`` keyword is
+    still accepted."""
     if theme is None:
-        theme = bool(dark) if dark is not None else "Claude Light"
+        theme = bool(dark) if dark is not None else "Light"
     name, c = _resolve_theme(theme)
     ACTIVE_COLORS.clear()
     ACTIVE_COLORS.update(c)

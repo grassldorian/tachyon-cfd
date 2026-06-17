@@ -230,7 +230,7 @@ When to stop and how often to refresh.
   the cell edges.
 - **Probe** — click two points to plot p, Mach and T along that line; the dialog
   has centerline and wall-pressure presets.
-- **◐ (color scheme)** — pick the GUI theme: Mono (B&W), Claude Light/Dark,
+- **◐ (color scheme)** — pick the GUI theme: Mono (B&W), Light, Dark,
   Blueprint, or Midnight.
 
 ---

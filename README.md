@@ -45,7 +45,7 @@ bracketed within ±3.5 % by the included gas models
   presets), altitude sweep (thrust & Isp vs altitude, aerospike comparisons),
   convergence gate, multi-page PDF report, MP4 export, 3D exhaust view, and a
   vector **engine designer** tab.
-- **Five GUI themes** — Mono (B&W, default), Claude Light/Dark, Blueprint, and
+- **Five GUI themes** — Mono (B&W, default), Light, Dark, Blueprint, and
   Midnight.
 
 ## Gallery
