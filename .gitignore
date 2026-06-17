@@ -21,3 +21,7 @@ engines/
 # local tooling
 .claude/
 *.log
+
+# scratch / scratch commit messages
+_*.txt
+_*.py
