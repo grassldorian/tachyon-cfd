@@ -64,6 +64,7 @@ _CUDA_SRC = Template(r"""
 #define NOSLIP    $NOSLIP
 #define WALLTH    $WALLTH
 #define WALL_TW   $WALL_TW
+#define STRETCH   $STRETCH
 #define AXI       $AXI
 #define AXISJ     $AXISJ
 #define AXSYM_TOP $AXSYM_TOP
@@ -103,6 +104,13 @@ _CUDA_SRC = Template(r"""
 #define UF(f,c)  U[(f)*NC + (c)]
 
 typedef struct { float rho,u,v,p,T,k,w,mul,mut,F1; } St;
+
+#if STRETCH
+// per-column x-cell-width multiplier (physical dx of column i = DX*SXW[i]).
+// 1.0 in the uniform nozzle region, geometrically growing downstream in the
+// wall-free plume so diamonds reach further. Uploaded after compile.
+__device__ float SXW[SX];
+#endif
 
 __device__ __forceinline__ float suth(float T){
     return MUREF * powf(T / TREFS, 1.5f) * (TREFS + SSUTH) / (T + SSUTH);
@@ -622,7 +630,12 @@ __global__ void cons2prim(const float* U, float* P, const unsigned char* ct,
         float rca = fabsf(RCELL(j));
         fy = fminf((rca + DX) / rca, 3.0f);
 #endif
-        float lam = (fabsf(u) + a) / DX + fy * (fabsf(v) + a) / DX + 4.0f * nue / (DX * DX);
+#if STRETCH
+        float dxc = DX * SXW[i];             // stretched x cell width
+#else
+        float dxc = DX;
+#endif
+        float lam = (fabsf(u) + a) / dxc + fy * (fabsf(v) + a) / DX + 4.0f * nue / (DX * DX);
         // cut cells: smaller fluid volume -> proportionally smaller stable dt
         dtl[c] = CFL * fmaxf(VF[c], 0.25f) / lam;
     }
@@ -729,12 +742,18 @@ __global__ void gradients(const float* P, float* G, const unsigned char* ct,
     St qE = fetch(P, ct, wd, i+1, j, i, j, 0, p0eff);
     St qS = fetch(P, ct, wd, i, j-1, i, j, 1, p0eff);
     St qN = fetch(P, ct, wd, i, j+1, i, j, 1, p0eff);
-    float h = 0.5f / DX;
-    GF(0,c) = (qE.u - qW.u) * h;  GF(1,c) = (qN.u - qS.u) * h;
-    GF(2,c) = (qE.v - qW.v) * h;  GF(3,c) = (qN.v - qS.v) * h;
-    GF(4,c) = (qE.T - qW.T) * h;  GF(5,c) = (qN.T - qS.T) * h;
-    GF(6,c) = (qE.k - qW.k) * h;  GF(7,c) = (qN.k - qS.k) * h;
-    GF(8,c) = (qE.w - qW.w) * h;  GF(9,c) = (qN.w - qS.w) * h;
+    float hy = 0.5f / DX;
+#if STRETCH
+    // non-uniform x central difference: 1 / (x_{i+1} - x_{i-1})
+    float hx = 1.0f / (DX * (0.5f*SXW[i-1] + SXW[i] + 0.5f*SXW[i+1]));
+#else
+    float hx = 0.5f / DX;
+#endif
+    GF(0,c) = (qE.u - qW.u) * hx;  GF(1,c) = (qN.u - qS.u) * hy;
+    GF(2,c) = (qE.v - qW.v) * hx;  GF(3,c) = (qN.v - qS.v) * hy;
+    GF(4,c) = (qE.T - qW.T) * hx;  GF(5,c) = (qN.T - qS.T) * hy;
+    GF(6,c) = (qE.k - qW.k) * hx;  GF(7,c) = (qN.k - qS.k) * hy;
+    GF(8,c) = (qE.w - qW.w) * hx;  GF(9,c) = (qN.w - qS.w) * hy;
 }
 
 // ---------------------------------------------------------------- turb_visc
@@ -862,7 +881,14 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
     float Fk = Fi[4], Fw = Fi[5];
 
 #if VISC
+#if STRETCH
+    // face-normal spacing: stretched in x (dir 0), uniform in y (dir 1)
+    float dni = (dir == 0)
+              ? 2.0f / (DX * (SXW[iL] + SXW[i]))
+              : 1.0f / DX;
+#else
     float dni = 1.0f / DX;
+#endif
     float dudn = (qR1.u - qL1.u) * dni;
     float dvdn = (qR1.v - qL1.v) * dni;
     float dTdn = (qR1.T - qL1.T) * dni;
@@ -974,7 +1000,12 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
     int c = IDX(i, j);
     if (ct[c] != 0) { res[c] = 0.0f; return; }
     int cE = IDX(i + 1, j), cN = IDX(i, j + 1);
-    float dxi = 1.0f / DX;
+    float dxi = 1.0f / DX;                    // y-direction (never stretched)
+#if STRETCH
+    float dxix = 1.0f / (DX * SXW[i]);        // stretched x-cell width
+#else
+    float dxix = dxi;
+#endif
     float dt = dtl[c];
     float aw = AXF[c], ae = AXF[cE], asf = AYF[c], an = AYF[cN];
     float lam = LAM[c];
@@ -989,7 +1020,7 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
     float rfS = RFACE(j) * rci, rfN = RFACE(j + 1) * rci;
     #pragma unroll
     for (int m = 0; m < 6; m++)
-        rhs[m] = (aw * FX[m*NC + c] - ae * FX[m*NC + cE]) * dxi
+        rhs[m] = (aw * FX[m*NC + c] - ae * FX[m*NC + cE]) * dxix
                + (rfS * asf * FY[m*NC + c] - rfN * an * FY[m*NC + cN]) * dxi;
     // wall closure chosen so a uniform-pressure still state stays exact
     // (together with the volumetric +p/r hoop source added after the
@@ -999,13 +1030,13 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
 #else
     #pragma unroll
     for (int m = 0; m < 6; m++)
-        rhs[m] = (aw * FX[m*NC + c] - ae * FX[m*NC + cE]) * dxi
+        rhs[m] = (aw * FX[m*NC + c] - ae * FX[m*NC + cE]) * dxix
                + (asf * FY[m*NC + c] - an * FY[m*NC + cN]) * dxi;
     float swx = aw - ae;
     float swy = asf - an;
 #endif
     // ---- embedded wall segment: pressure force along the smooth normal ----
-    rhs[1] -= pc * swx * dxi;
+    rhs[1] -= pc * swx * dxix;
     rhs[2] -= pc * swy * dxi;
 #if VISC && NOSLIP
     // wall shear on the embedded segment via the Reichardt wall function:
@@ -1259,6 +1290,7 @@ def build_source(cfg, nx: int, ny: int) -> str:
         WALLTH=1 if (getattr(cfg, "wall_T", 0.0) > 0.0
                      and cfg.wall_type == "noslip" and cfg.viscous) else 0,
         WALL_TW=_f(max(getattr(cfg, "wall_T", 0.0), 1.0)),
+        STRETCH=1 if getattr(cfg, "plume_stretch", 1.0) > 1.0 + 1e-6 else 0,
         AXI=1 if getattr(cfg, "axisymmetric", False) else 0,
         AXISJ=_f(axis_j(cfg, ny)),
         AXSYM_TOP=1 if (getattr(cfg, "axisymmetric", False)
@@ -1269,12 +1301,34 @@ def build_source(cfg, nx: int, ny: int) -> str:
     return _CUDA_SRC.substitute(subs)
 
 
+def compute_stretch(mask, cfg):
+    """Per-column x-width multiplier (padded, length nx+4) for downstream
+    plume stretching, or None when disabled. Columns stay uniform (1.0)
+    through the nozzle and start growing geometrically a few cells past the
+    last wall, so all cut-cell walls remain on the uniform grid."""
+    ratio = float(getattr(cfg, "plume_stretch", 1.0))
+    if ratio <= 1.0 + 1e-6:
+        return None
+    from .mask import WALL
+    nx = mask.nx
+    ct = mask.cell_type                       # padded (ny+4, nx+4)
+    wall_cols = np.where((ct[2:-2, 2:-2] == WALL).any(axis=0))[0]
+    start = (int(wall_cols.max()) + 5) if wall_cols.size else int(0.4 * nx)
+    start = min(max(start, 1), nx - 1)
+    cap = 8.0                                 # cells grow up to 8x the base
+    sx = np.ones(nx, dtype=np.float64)
+    for k in range(start, nx):
+        sx[k] = min(sx[k - 1] * ratio, cap)
+    # pad: halo columns copy the nearest interior column
+    return np.concatenate([[sx[0], sx[0]], sx, [sx[-1], sx[-1]]])
+
+
 class KernelSet:
     """Compiles the CUDA module and exposes ready-to-launch kernels."""
 
     BLOCK = (32, 8)
 
-    def __init__(self, cfg, nx: int, ny: int):
+    def __init__(self, cfg, nx: int, ny: int, stretch_sx=None):
         import cupy as cp
         self.cp = cp
         src = build_source(cfg, nx, ny)
@@ -1288,6 +1342,12 @@ class KernelSet:
                 dst = cp.ndarray(tab[key].size, dtype=cp.float32, memptr=ptr)
                 dst[...] = cp.asarray(
                     np.ascontiguousarray(tab[key], dtype=np.float32).ravel())
+        if stretch_sx is not None and getattr(cfg, "plume_stretch", 1.0) > 1.0 + 1e-6:
+            sxw = np.ascontiguousarray(stretch_sx, dtype=np.float32)
+            assert sxw.size == nx + 4, (sxw.size, nx + 4)
+            ptr = self.module.get_global("SXW")
+            dst = cp.ndarray(sxw.size, dtype=cp.float32, memptr=ptr)
+            dst[...] = cp.asarray(sxw)
         self.sx, self.sy = nx + 4, ny + 4
         bx, by = self.BLOCK
         self.grid = ((self.sx + bx - 1) // bx, (self.sy + by - 1) // by)

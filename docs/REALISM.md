@@ -141,12 +141,21 @@ out of scope unless requested.
   destabilizes transonic startup — start on minmod/van Leer if it stalls.
   Reducing `inlet_mut_ratio` from 50 to 5–10 is a complementary dissipation
   win (SST inlet eddy viscosity costs ~5–8 % of choked mass flow).
-- **Downstream mesh stretching (NEXT ROUND):** the grid is uniform
-  (scalar `DX`), so the plume gets throat-resolution everywhere and wastes
-  cells on far ambient. True stretching means replacing the compile-time
-  `DX` with per-cell/face metric arrays across every kernel + the postproc
-  and GUI coordinate mappings — a dedicated architectural round. Biggest
-  remaining lever for resolving long diamond trains cheaply.
+- **Downstream mesh stretching (DONE 2026-06):** `plume_stretch` config /
+  GUI field (Geometry). Per-column x-width multiplier grows geometrically a
+  few cells past the last wall, so all cut-cell walls stay on the uniform
+  grid and the wall-free plume extends downstream for the same cell count.
+  Implemented as a kernel metric (`SXW` device array) in the dt limit,
+  gradients, viscous fluxes and the rk_combine x-divergence; default off is
+  numerically bit-identical (isentropic regression unchanged). Verified:
+  enabling stretch on the test nozzle moved thrust 0.31 % and mass flow
+  0.16 % (engine on the uniform grid → unchanged, as designed) while the
+  plume domain grew 1.32× at ratio 1.03. y is never stretched.
+  Remaining GUI polish (deferred): the field view shows the computational
+  grid (downstream cells physically larger than drawn); exact downstream
+  positions are in the exported NPZ `x_centers` and the schlieren field is
+  computed against true cell centers. A future pass can resample the field
+  view / probe to physical coordinates under stretching.
 - **Axisymmetric source terms**: verify the geometric source terms at the
   axis are well-behaved as r → 0 with cut cells (diagnostics exist in
   `tests/diag_axi.py`).

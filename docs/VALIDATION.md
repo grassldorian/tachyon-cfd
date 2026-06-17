@@ -130,6 +130,30 @@ pe ≈ 38 kPa and (marginally, like the real engine nearly did) separates
 in-model. Use η-corrected equilibrium runs at/above the engine's design
 altitude; at sea level prefer η=1 equilibrium or the CP preset.
 
+## Downstream mesh stretching (2026-06)
+
+`plume_stretch` (Geometry; 1.0 = off) grows the x-cell width geometrically
+downstream of the nozzle exit. Because every wall stays on the uniform
+grid, the engine performance must not move — that is the accuracy gate.
+
+Test nozzle (`tests/test_stretch.py`, axisymmetric, 5000 steps), ratio
+1.03 vs off:
+
+| Quantity | stretch off | stretch on (1.03) |
+|---|---|---|
+| Thrust | 1207.2 N | 1203.4 N (**−0.31 %**) |
+| Mass flow | 0.2001 kg/s | 0.2004 kg/s (**+0.16 %**) |
+| Plume domain length | 320 mm | 420 mm (**1.32×**) |
+| Stable / finite | yes | yes |
+
+So the plume reaches 32 % further for the same cell count while the engine
+numbers stay put — the sub-percent residual is plume-feedback/convergence
+noise, not a discretization shift. With stretching off the solver is
+numerically bit-identical (the isentropic regression returns the same
+9.211 kg/s / −1.28 % / −11.36 % as every prior run). y is never stretched;
+the metric only touches the x-direction dt limit, gradients, viscous
+fluxes and flux divergence.
+
 ## Wall functions / no-slip walls (2026-06)
 
 No-slip walls now use Reichardt's law of the wall (τ_w = ρu_τ², valid at

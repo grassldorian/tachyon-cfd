@@ -21,7 +21,15 @@ class GPUSolver:
         self.sx, self.sy = self.nx + 4, self.ny + 4
         nc = self.sx * self.sy
 
-        self.kern = KernelSet(cfg, self.nx, self.ny)
+        from .cuda_kernels import compute_stretch
+        self._stretch_sx = compute_stretch(mask, cfg)     # padded len nx+4 or None
+        self.kern = KernelSet(cfg, self.nx, self.ny,
+                              stretch_sx=self._stretch_sx)
+        # physical x of interior cell centers (non-uniform when stretched)
+        sxi = (self._stretch_sx[2:-2] if self._stretch_sx is not None
+               else np.ones(self.nx))
+        xf = np.concatenate([[0.0], np.cumsum(sxi)]) * mask.dx
+        self.x_centers = (0.5 * (xf[:-1] + xf[1:])).astype(np.float64)
 
         f4 = cp.float32
         self.U = cp.zeros((6, self.sy, self.sx), dtype=f4)
@@ -137,7 +145,8 @@ class GPUSolver:
         Compile-time constants such as ``farfield_p`` live in the kernel source,
         so the kernels must be recompiled, but ``U`` is preserved."""
         self.cfg = cfg
-        self.kern = KernelSet(cfg, self.nx, self.ny)
+        self.kern = KernelSet(cfg, self.nx, self.ny,
+                              stretch_sx=self._stretch_sx)
         self.res0 = None
         self.residual = 1.0
 
@@ -187,7 +196,8 @@ class GPUSolver:
             a = np.sqrt(gam * cfg.R_gas * np.maximum(T, 1.0))
         vel = np.sqrt(u * u + v * v)
         mach = vel / a
-        gy, gx = np.gradient(rho, self.mask.dx)
+        # x may be non-uniform (plume stretching); use true cell centers
+        gy, gx = np.gradient(rho, self.mask.dx, self.x_centers)
         schlieren = np.sqrt(gx * gx + gy * gy)
 
         fluid = self.fluid_np[2:-2, 2:-2]
@@ -221,10 +231,12 @@ class GPUSolver:
             "step": self.step_count, "residual": self.residual,
             "sim_time": self.sim_time, "steps_per_sec": self._steps_per_sec,
             "performance": perf,
+            "stretched": self._stretch_sx is not None,
         }
-        return {"fields": fields, "meta": meta}
+        return {"fields": fields, "meta": meta, "x_centers": self.x_centers}
 
     def save_npz(self, path: str):
         snap = self.snapshot()
         np.savez_compressed(path, **{k: v for k, v in snap["fields"].items()},
-                            step=snap["meta"]["step"])
+                            step=snap["meta"]["step"],
+                            x_centers=snap["x_centers"])

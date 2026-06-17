@@ -107,6 +107,7 @@ FLOAT_FIELDS = [
     # (attr, label, group)
     ("meters_per_pixel", "Meters per pixel [m]", "Geometry"),
     ("mesh_scale", "Mesh density ×", "Geometry"),
+    ("plume_stretch", "Plume stretch (1=off)", "Geometry"),
     ("gamma", "Heat capacity ratio γ [-]", "Gas"),
     ("R_gas", "Gas constant R [J/(kg·K)]", "Gas"),
     ("mu_ref", "Sutherland μ_ref [Pa·s]", "Gas"),
@@ -400,6 +401,14 @@ class MainWindow(QMainWindow):
             "Mesh density multiplier. >1 makes a finer grid (more cells,\n"
             "slower, sharper); <1 a coarser grid. The engine's physical size\n"
             "is unchanged. Takes effect immediately on the preview and run.")
+        self.cfg_panel.edits["plume_stretch"].setToolTip(
+            "Downstream x-mesh stretch ratio per column past the nozzle exit\n"
+            "(1.0 = uniform/off; try 1.02–1.05). Extends the plume domain and\n"
+            "keeps the near-exit grid fine so shock diamonds survive further.\n"
+            "Walls stay on the uniform grid, so thrust/Isp are unchanged.\n"
+            "Note: the field view shows the computational grid — downstream\n"
+            "cells are physically larger than drawn; exported NPZ carries the\n"
+            "true x_centers.")
         self.cfg_panel.edits["eta_cstar"].setToolTip(
             "Combustion (c*) efficiency. Incomplete combustion releases less\n"
             "energy, so the effective chamber temperature is η² · T₀.\n"

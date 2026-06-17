@@ -48,6 +48,15 @@ class SimConfig:
                                              #   (>1 finer/more cells, <1 coarser).
                                              #   Effective cell size = meters_per_pixel
                                              #   / mesh_scale; physical size is fixed.
+    plume_stretch: float = 1.0               # downstream x-mesh stretch ratio
+                                             #   per column past the nozzle exit
+                                             #   (1.0 = uniform/off; e.g. 1.03 =
+                                             #   each plume column 3% wider than
+                                             #   the last). Extends the plume
+                                             #   domain + keeps near-exit fine so
+                                             #   shock diamonds survive. Walls
+                                             #   stay on the uniform grid, so
+                                             #   engine performance is unchanged.
 
     # --- Gas properties (default: air / combustion-gas-like ideal gas) ---
     propellant: str = "Custom"               # preset name or "Custom" (record only)
