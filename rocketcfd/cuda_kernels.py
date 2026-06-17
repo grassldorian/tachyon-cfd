@@ -65,6 +65,8 @@ _CUDA_SRC = Template(r"""
 #define WALLTH    $WALLTH
 #define WALL_TW   $WALL_TW
 #define STRETCH   $STRETCH
+#define CARBFIX    $CARBFIX
+#define COMPCORR   $COMPCORR
 #define AXI       $AXI
 #define AXISJ     $AXISJ
 #define AXSYM_TOP $AXSYM_TOP
@@ -286,6 +288,25 @@ __device__ __forceinline__ float weno5(float m2, float m1, float c0,
 }
 #endif
 
+#if CARBFIX
+// Ducros-gated shock sensor per cell: ~1 inside a strong compression shock,
+// ~0 in expansions, shear layers and turbulence (so it does NOT add
+// dissipation to the plume mixing layer or boundary layers). Drives the
+// HLLC->HLL blend that cures the carbuncle at the Mach disk.
+__device__ __forceinline__ float shock_theta(const float* P, const float* G, int c){
+    float divu = GF(0,c) + GF(3,c);          // du/dx + dv/dy
+    if (divu >= 0.0f) return 0.0f;           // expansion: never a shock
+    float curl = GF(2,c) - GF(1,c);          // dv/dx - du/dy
+    float duc = divu*divu / (divu*divu + curl*curl + 1.0e-12f);   // Ducros
+    float a = sqrtf(GAM * fmaxf(PF(3,c), PMIN) / fmaxf(PF(0,c), RHOMIN));
+    float s = -divu * DX / fmaxf(a, 1.0e-3f);    // compression over a cell / a
+    // only strong (near-normal, ~sonic-over-a-cell) shocks — where the
+    // carbuncle lives — so weak oblique plume shocks are left to HLLC
+    float ramp = fminf(fmaxf(s - 1.0f, 0.0f), 1.0f);            // 0<s1  1>s2
+    return duc * ramp;
+}
+#endif
+
 // State of stencil cell (ic,jc) as seen from owner fluid cell (io,jo).
 // Walls and inlets are replaced by ghost states; dir = face direction (0=x,1=y).
 // p0eff: ramped inlet total pressure (soft start), <= P0IN.
@@ -419,7 +440,7 @@ __device__ St fetch(const float* P, const unsigned char* ct, const float* wd,
 // Numerical flux, selected at compile time:
 //   SCHEME 0 = HLL, 1 = HLLC, 2 = Roe (Harten entropy fix), 3 = AUSM+.
 // Returns (mass, normal-mom, tangential-mom, energy, k, w).
-__device__ void riemann(const St L, const St R, int dir, float* F)
+__device__ void riemann(const St L, const St R, int dir, float shock, float* F)
 {
     float unL = (dir == 0) ? L.u : L.v;
     float utL = (dir == 0) ? L.v : L.u;
@@ -556,6 +577,17 @@ __device__ void riemann(const St L, const St R, int dir, float* F)
                            fac*(ER/R.rho + (S - unR)*(S + R.p/dR)),
                            fac*R.k, fac*R.w};
             for (int m = 0; m < 6; m++) F[m] = FR[m] + SR * (Us[m] - UR[m]);
+        }
+        // carbuncle cure: blend the contact-resolving HLLC flux toward the
+        // dissipative (carbuncle-free) HLL flux only at strong shocks
+        // (shock>0 from the Ducros sensor), curing the Mach-disk instability
+        // while keeping HLLC's contact/shear resolution everywhere else.
+        if (shock > 0.0f) {
+            float inv = 1.0f / (SR - SL);
+            for (int m = 0; m < 6; m++) {
+                float fhll = (SR*FL[m] - SL*FR[m] + SL*SR*(UR[m]-UL[m])) * inv;
+                F[m] = (1.0f - shock) * F[m] + shock * fhll;
+            }
         }
 #else
         float inv = 1.0f / (SR - SL);
@@ -876,7 +908,11 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
 #endif
 
     float Fi[6];
-    riemann(qL, qR, dir, Fi);
+    float shock = 0.0f;
+#if CARBFIX
+    shock = fmaxf(shock_theta(P, G, cL), shock_theta(P, G, cR));
+#endif
+    riemann(qL, qR, dir, shock, Fi);
     float Fmass = Fi[0], Fn = Fi[1], Ft = Fi[2], FE = Fi[3];
     float Fk = Fi[4], Fw = Fi[5];
 
@@ -1107,8 +1143,22 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
     // point-implicit destruction for k and omega
     float w  = PF(6,c), F1 = PF(9,c);
     float bet = F1 * BET1 + (1.0f - F1) * BET2;
+    float bstar_c = BSTAR;
+#if COMPCORR
+    // Wilcox compressibility correction: dilatational dissipation grows with
+    // the turbulent Mach number Mt above Mt0=0.5, moving destruction from
+    // omega into k (slower high-Mach shear-layer spreading; off at walls
+    // where k->0). xi* = 1.5, Mt0^2 = 0.25.
+    {
+        float a2c = GAM * fmaxf(PF(3,c), PMIN) / fmaxf(PF(0,c), RHOMIN);
+        float Mt2 = 2.0f * fmaxf(PF(5,c), 0.0f) / fmaxf(a2c, 1.0e-6f);
+        float Fc = fmaxf(Mt2 - 0.25f, 0.0f);
+        bstar_c = BSTAR * (1.0f + 1.5f * Fc);
+        bet = fmaxf(bet - BSTAR * 1.5f * Fc, 0.0f);
+    }
+#endif
     float rk = (ca * U0[4*NC+c] + cb * U[4*NC+c] + cc * dt * rhs[4])
-             / (1.0f + cc * dt * BSTAR * w);
+             / (1.0f + cc * dt * bstar_c * w);
     float rw = (ca * U0[5*NC+c] + cb * U[5*NC+c] + cc * dt * rhs[5])
              / (1.0f + cc * dt * 2.0f * bet * w);
 #if TURB
@@ -1328,9 +1378,15 @@ def build_source(cfg, nx: int, ny: int) -> str:
             TMINT=_f(10.0 ** lt[0] * 1.02), TMAXT=_f(10.0 ** lt[-1] * 0.99),
             NISEN=len(pr_a), ISEN_DEF=isen_def)
         _, _, rgfar = eqm.ambient_state(tab, cfg.farfield_p, cfg.farfield_T)
+    # effective cell size: mesh_scale resamples the geometry to a finer grid
+    # (more cells, smaller cells) keeping the physical size fixed, so the
+    # kernel's cell width must be meters_per_pixel / mesh_scale, matching
+    # mask.dx. (Using meters_per_pixel alone mis-scaled every run with
+    # mesh_scale != 1 — the bug this fixes.)
+    dx_eff = cfg.meters_per_pixel / max(getattr(cfg, "mesh_scale", 1.0), 1e-9)
     subs = dict(
         SX=nx + 4, SY=ny + 4, NX=nx, NY=ny,
-        DX=_f(cfg.meters_per_pixel),
+        DX=_f(dx_eff),
         GAM=_f(g), GM1=_f(g - 1.0), RGAS=_f(cfg.R_gas), CPG=_f(cfg.cp),
         RGFAR=_f(rgfar),
         THERMO=mode,
@@ -1358,6 +1414,8 @@ def build_source(cfg, nx: int, ny: int) -> str:
                      and cfg.wall_type == "noslip" and cfg.viscous) else 0,
         WALL_TW=_f(max(getattr(cfg, "wall_T", 0.0), 1.0)),
         STRETCH=1 if getattr(cfg, "plume_stretch", 1.0) > 1.0 + 1e-6 else 0,
+        CARBFIX=1 if getattr(cfg, "carbuncle_fix", True) else 0,
+        COMPCORR=1 if getattr(cfg, "compressibility_correction", False) else 0,
         AXI=1 if getattr(cfg, "axisymmetric", False) else 0,
         AXISJ=_f(axis_j(cfg, ny)),
         AXSYM_TOP=1 if (getattr(cfg, "axisymmetric", False)

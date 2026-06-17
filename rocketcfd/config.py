@@ -109,6 +109,15 @@ class SimConfig:
                                              #   no-slip walls (wall-function
                                              #   heat flux via Kader's T+)
 
+    carbuncle_fix: bool = True               # blend HLLC->HLL at strong shocks
+                                             #   (Ducros-gated) to cure the
+                                             #   Mach-disk carbuncle; no effect
+                                             #   away from strong shocks
+    compressibility_correction: bool = False # Wilcox dilatational-dissipation
+                                             #   correction to k-omega SST for
+                                             #   high-Mach shear layers (slows
+                                             #   plume spreading; opt-in)
+
     flux_scheme: str = "hllc"                # "hllc" | "hll" | "roe" | "ausm"
     muscl_order: int = 2                     # 1 = first order, 2 = MUSCL
     limiter: str = "minmod"                  # "minmod" or "vanalbada"

@@ -102,8 +102,12 @@ item (integral thrust/Isp are much less affected).
 
 - SST is calibrated for attached boundary layers; the free shear layer of
   the plume and over-expanded separation are weak spots.
-- Compressibility correction (Sarkar/Zeman dilatational dissipation) for
-  high-Mach shear layers: cheap, improves plume spreading rates.
+- **DONE (2026-06):** compressibility correction (Wilcox dilatational
+  dissipation) for high-Mach shear layers — `compressibility_correction`
+  config / GUI toggle (default off). Lowers eddy viscosity / slows plume
+  spreading at high turbulent Mach number; verified in docs/VALIDATION.md.
+- **DONE (2026-06):** Ducros-gated **carbuncle cure** for the Mach disk
+  (`carbuncle_fix`, default on) — blends HLLC→HLL only at strong shocks.
 - A realizability / production limiter at shocks (Menter's 10·β*ρωk clip is
   present in most SST variants — verify it's in the kernel) prevents
   spurious turbulence generation in the shock train of over-expanded flow.

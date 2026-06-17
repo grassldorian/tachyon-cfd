@@ -229,9 +229,20 @@ class ConfigPanel(QWidget):
         self.viscous_chk = QCheckBox("Viscous (Navier–Stokes)")
         self.turb_chk = QCheckBox("Turbulence model (k-ω SST)")
         self.localdt_chk = QCheckBox("Local time stepping (steady)")
+        self.carbuncle_chk = QCheckBox("Carbuncle cure (HLLC shocks)")
+        self.carbuncle_chk.setToolTip(
+            "Blend HLLC toward HLL only at strong shocks (Ducros-gated) to\n"
+            "cure the Mach-disk carbuncle instability. No effect away from\n"
+            "strong shocks.")
+        self.compcorr_chk = QCheckBox("Compressibility correction (SST)")
+        self.compcorr_chk.setToolTip(
+            "Wilcox dilatational-dissipation correction for high-Mach shear\n"
+            "layers — slows the plume spreading rate to match experiment.")
         num.addRow(self.viscous_chk)
         num.addRow(self.turb_chk)
         num.addRow(self.localdt_chk)
+        num.addRow(self.carbuncle_chk)
+        num.addRow(self.compcorr_chk)
 
         note = QLabel("Changes take effect on  ⟲ Initialize.")
         note.setStyleSheet("color: #888; font-style: italic;")
@@ -263,6 +274,9 @@ class ConfigPanel(QWidget):
         self.viscous_chk.setChecked(cfg.viscous)
         self.turb_chk.setChecked(cfg.turbulence)
         self.localdt_chk.setChecked(cfg.local_dt)
+        self.carbuncle_chk.setChecked(getattr(cfg, "carbuncle_fix", True))
+        self.compcorr_chk.setChecked(
+            getattr(cfg, "compressibility_correction", False))
         self.axi_chk.setChecked(cfg.axisymmetric)
         self.smooth_chk.setChecked(cfg.smooth_boundary)
         self.axis_combo.setCurrentIndex(
@@ -295,6 +309,8 @@ class ConfigPanel(QWidget):
         cfg.viscous = self.viscous_chk.isChecked()
         cfg.turbulence = self.turb_chk.isChecked()
         cfg.local_dt = self.localdt_chk.isChecked()
+        cfg.carbuncle_fix = self.carbuncle_chk.isChecked()
+        cfg.compressibility_correction = self.compcorr_chk.isChecked()
         cfg.axisymmetric = self.axi_chk.isChecked()
         cfg.smooth_boundary = self.smooth_chk.isChecked()
         cfg.axis_location = ["center", "top", "bottom"][self.axis_combo.currentIndex()]

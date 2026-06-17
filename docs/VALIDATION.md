@@ -130,6 +130,41 @@ pe ≈ 38 kPa and (marginally, like the real engine nearly did) separates
 in-model. Use η-corrected equilibrium runs at/above the engine's design
 altitude; at sea level prefer η=1 equilibrium or the CP preset.
 
+## mesh_scale DX correctness fix (2026-06)
+
+Bug: the kernel's cell size came from `meters_per_pixel`, but after a
+`mesh_scale` resampling the true cell is `meters_per_pixel / mesh_scale`
+(= `mask.dx`). They only matched at mesh_scale = 1 (every validated run), so
+any other mesh density silently mis-scaled the whole physics. Fixed so the
+kernel `DX` = `mask.dx` at all mesh scales (verified: physical domain is a
+consistent 320 mm at mesh_scale 0.5 / 1 / 2).
+
+Mesh-independence on the well-resolved F-1 (the decisive test), 16 000 steps:
+
+| mesh_scale | Thrust | Isp | Mass flow |
+|---|---|---|---|
+| 1.0 (validated) | 6.21 MN | 260.4 s | 2431 kg/s |
+| 1.25 (after fix) | 6.24 MN | 262.8 s | 2420 kg/s |
+
+→ 0.4 % thrust / 0.9 % Isp / 0.5 % mass-flow change for a 1.25× refinement —
+proper grid convergence. Before the fix this would have been off by ~the
+mesh-scale factor. At mesh_scale = 1 the solver is bit-identical (the fix is
+a no-op there).
+
+## Carbuncle cure + compressibility correction (2026-06)
+
+- **Carbuncle cure** (`carbuncle_fix`, default on): a Ducros-gated shock
+  sensor blends the HLLC flux toward HLL only at strong (near-sonic-over-a-
+  cell) shocks — where the Mach-disk carbuncle lives — leaving HLLC's
+  contact/shear resolution everywhere else. Impact on shock-free / weak-shock
+  flows is within noise (isentropic mass flow −1.15 % vs −1.28 % without it);
+  it activates only for strong normal shocks. Stable across all gas models.
+- **Compressibility correction** (`compressibility_correction`, default off):
+  Wilcox dilatational-dissipation term in k-ω SST (ξ\* = 1.5, Mt₀ = 0.5),
+  raising β\* and lowering β with turbulent Mach number. Verified to lower
+  the mean eddy-viscosity ratio in the plume (~1166 → 1063), i.e. slower
+  high-Mach shear-layer spreading, matching the known compressibility effect.
+
 ## Two-gamma plume mixing (2026-06)
 
 `two_gamma` transports an exhaust mass fraction Z (1 = exhaust, 0 = ambient
