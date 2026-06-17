@@ -198,9 +198,21 @@ class ConfigPanel(QWidget):
             "equilibrium gas model (it falls back to HLLC there).")
         num.addRow("Riemann solver", self.flux_combo)
         self.order_combo = QComboBox()
-        self.order_combo.addItems(["2nd order (MUSCL)", "1st order"])
+        self.order_combo.addItems(["2nd order (MUSCL)", "1st order",
+                                   "5th order (WENO)"])
+        self.order_combo.setToolTip(
+            "WENO5 has far lower numerical dissipation than MUSCL — shock\n"
+            "diamonds and shear layers survive much further downstream.\n"
+            "It runs in the interior fluid and falls back to MUSCL next to\n"
+            "walls. Slower per step; pairs well with a fine mesh.")
         num.addRow("Spatial order", self.order_combo)
-        self.limiter_combo = QComboBox(); self.limiter_combo.addItems(["minmod", "van Albada"])
+        self.limiter_combo = QComboBox()
+        self.limiter_combo.addItems(["minmod", "van Albada", "van Leer",
+                                     "superbee"])
+        self.limiter_combo.setToolTip(
+            "MUSCL slope limiter, least → most compressive:\n"
+            "minmod (robust, diffusive) · van Albada · van Leer\n"
+            "(sharper, good default) · superbee (sharpest, can over-steepen).")
         num.addRow("Limiter", self.limiter_combo)
         self.wall_combo = QComboBox(); self.wall_combo.addItems(["no-slip", "slip"])
         num.addRow("Wall condition", self.wall_combo)
@@ -232,8 +244,11 @@ class ConfigPanel(QWidget):
         schemes = ["hllc", "hll", "roe", "ausm"]
         s = cfg.flux_scheme.lower().rstrip("+")
         self.flux_combo.setCurrentIndex(schemes.index(s) if s in schemes else 0)
-        self.order_combo.setCurrentIndex(0 if cfg.muscl_order >= 2 else 1)
-        self.limiter_combo.setCurrentIndex(0 if cfg.limiter == "minmod" else 1)
+        self.order_combo.setCurrentIndex(
+            2 if cfg.muscl_order >= 5 else 0 if cfg.muscl_order >= 2 else 1)
+        self.limiter_combo.setCurrentIndex(
+            {"minmod": 0, "vanalbada": 1, "vanleer": 2, "superbee": 3}
+            .get(cfg.limiter.lower().replace(" ", ""), 0))
         self.wall_combo.setCurrentIndex(0 if cfg.wall_type == "noslip" else 1)
         self.viscous_chk.setChecked(cfg.viscous)
         self.turb_chk.setChecked(cfg.turbulence)
@@ -262,8 +277,9 @@ class ConfigPanel(QWidget):
             except ValueError:
                 raise ValueError(f"Invalid integer for '{label}'")
         cfg.flux_scheme = ["hllc", "hll", "roe", "ausm"][self.flux_combo.currentIndex()]
-        cfg.muscl_order = 2 if self.order_combo.currentIndex() == 0 else 1
-        cfg.limiter = "minmod" if self.limiter_combo.currentIndex() == 0 else "vanalbada"
+        cfg.muscl_order = {0: 2, 1: 1, 2: 5}[self.order_combo.currentIndex()]
+        cfg.limiter = ["minmod", "vanalbada", "vanleer",
+                       "superbee"][self.limiter_combo.currentIndex()]
         cfg.wall_type = "noslip" if self.wall_combo.currentIndex() == 0 else "slip"
         cfg.viscous = self.viscous_chk.isChecked()
         cfg.turbulence = self.turb_chk.isChecked()

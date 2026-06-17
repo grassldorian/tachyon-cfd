@@ -57,7 +57,8 @@ _CUDA_SRC = Template(r"""
 #define CFL       $CFL
 #define SCHEME    $SCHEME
 #define ORDER2    $ORDER2
-#define LIM_VA    $LIM_VA
+#define LIM       $LIM
+#define WENO      $WENO
 #define VISC      $VISC
 #define TURB      $TURB
 #define NOSLIP    $NOSLIP
@@ -228,16 +229,54 @@ __device__ __forceinline__ float T_from_e(float eR, float Tg){
 }
 #endif
 
+// MUSCL slope limiter on two consecutive differences a (backward) and
+// b (forward). LIM selects: 0 minmod, 1 van Albada, 2 van Leer, 3 superbee.
+// All return 0 at extrema (a*b <= 0) for TVD monotonicity.
 __device__ __forceinline__ float limslope(float a, float b){
-#if LIM_VA
-    float ab = a * b;
+#if LIM == 1
+    float ab = a * b;                       // van Albada (smooth)
     if (ab <= 0.0f) return 0.0f;
     return ab * (a + b) / (a*a + b*b + 1.0e-30f);
+#elif LIM == 2
+    float ab = a * b;                       // van Leer (harmonic mean)
+    if (ab <= 0.0f) return 0.0f;
+    return 2.0f * ab / (a + b);
+#elif LIM == 3
+    if (a * b <= 0.0f) return 0.0f;         // superbee (most compressive)
+    float s = (a > 0.0f) ? 1.0f : -1.0f;
+    float fa = fabsf(a), fb = fabsf(b);
+    return s * fmaxf(fminf(2.0f * fa, fb), fminf(fa, 2.0f * fb));
 #else
-    if (a * b <= 0.0f) return 0.0f;
+    if (a * b <= 0.0f) return 0.0f;         // minmod (most dissipative)
     return fabsf(a) < fabsf(b) ? a : b;
 #endif
 }
+
+#if WENO
+// 5th-order WENO (Jiang-Shu): reconstruct the value at the RIGHT face of the
+// center cell c0 from the 5-point stencil (m2, m1, c0, p1, p2). Far lower
+// numerical dissipation than MUSCL, so shock-cell trains and shear layers
+// survive much further downstream. Used only where the whole stencil is
+// fluid; cells touching walls/edges fall back to MUSCL.
+__device__ __forceinline__ float weno5(float m2, float m1, float c0,
+                                       float p1, float p2){
+    const float eps = 1.0e-6f;
+    float q0 = ( 2.0f*m2 - 7.0f*m1 + 11.0f*c0) * 0.16666667f;
+    float q1 = (-1.0f*m1 + 5.0f*c0 +  2.0f*p1) * 0.16666667f;
+    float q2 = ( 2.0f*c0 + 5.0f*p1 -  1.0f*p2) * 0.16666667f;
+    float b0 = 1.0833333f*(m2 - 2.0f*m1 + c0)*(m2 - 2.0f*m1 + c0)
+             + 0.25f*(m2 - 4.0f*m1 + 3.0f*c0)*(m2 - 4.0f*m1 + 3.0f*c0);
+    float b1 = 1.0833333f*(m1 - 2.0f*c0 + p1)*(m1 - 2.0f*c0 + p1)
+             + 0.25f*(m1 - p1)*(m1 - p1);
+    float b2 = 1.0833333f*(c0 - 2.0f*p1 + p2)*(c0 - 2.0f*p1 + p2)
+             + 0.25f*(3.0f*c0 - 4.0f*p1 + p2)*(3.0f*c0 - 4.0f*p1 + p2);
+    float w0 = 0.1f / ((eps + b0)*(eps + b0));
+    float w1 = 0.6f / ((eps + b1)*(eps + b1));
+    float w2 = 0.3f / ((eps + b2)*(eps + b2));
+    float wi = 1.0f / (w0 + w1 + w2);
+    return (w0*q0 + w1*q1 + w2*q2) * wi;
+}
+#endif
 
 // State of stencil cell (ic,jc) as seen from owner fluid cell (io,jo).
 // Walls and inlets are replaced by ghost states; dir = face direction (0=x,1=y).
@@ -763,9 +802,39 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
     St qL1 = fetch(P, ct, wd, iL, jL, i, j, dir, p0eff);   // L seen from R
     St qR1 = fetch(P, ct, wd, i, j, iL, jL, dir, p0eff);   // R seen from L
     St qL = qL1, qR = qR1;
+    bool hi_done = false;
+
+#if WENO
+    // 5th-order WENO where the full 6-cell stencil along `dir` is interior
+    // fluid and in-bounds; otherwise fall through to MUSCL below.
+    {
+        int xm = iL - 2*oi, ym = jL - 2*oj;        // furthest upwind cell
+        int xp = i + 2*oi,  yp = j + 2*oj;         // furthest downwind cell
+        if (xm >= 0 && ym >= 0 && xp < SX && yp < SY) {
+            int cm2 = IDX(xm, ym), cm1 = IDX(iL - oi, jL - oj);
+            int cp2 = IDX(i + oi, j + oj), cp3 = IDX(xp, yp);
+            if (ct[cm2]==0 && ct[cm1]==0 && ct[cL]==0 && ct[cR]==0
+                && ct[cp2]==0 && ct[cp3]==0) {
+                #define WL(f) weno5(PF(f,cm2),PF(f,cm1),PF(f,cL),PF(f,cR),PF(f,cp2))
+                #define WR(f) weno5(PF(f,cp3),PF(f,cp2),PF(f,cR),PF(f,cL),PF(f,cm1))
+                qL.rho = WL(0); qL.u = WL(1); qL.v = WL(2);
+                qL.p = WL(3);   qL.k = WL(5); qL.w = WL(6);
+                qR.rho = WR(0); qR.u = WR(1); qR.v = WR(2);
+                qR.p = WR(3);   qR.k = WR(5); qR.w = WR(6);
+                #undef WL
+                #undef WR
+                if (qL.rho < RHOMIN || qL.p < PMIN || qL.k < 0.0f || qL.w < WMINV)
+                    qL = qL1;
+                if (qR.rho < RHOMIN || qR.p < PMIN || qR.k < 0.0f || qR.w < WMINV)
+                    qR = qR1;
+                hi_done = true;
+            }
+        }
+    }
+#endif
 
 #if ORDER2
-    if (tL == 0 || tL == 3) {
+    if (!hi_done && (tL == 0 || tL == 3)) {
         St qm = fetch(P, ct, wd, iL - oi, jL - oj, iL, jL, dir, p0eff);
         qL.rho = qL1.rho + 0.5f * limslope(qL1.rho - qm.rho, qR1.rho - qL1.rho);
         qL.u   = qL1.u   + 0.5f * limslope(qL1.u   - qm.u,   qR1.u   - qL1.u);
@@ -775,7 +844,7 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
         qL.w   = qL1.w   + 0.5f * limslope(qL1.w   - qm.w,   qR1.w   - qL1.w);
         if (qL.rho < RHOMIN || qL.p < PMIN || qL.k < 0.0f || qL.w < WMINV) qL = qL1;
     }
-    if (tR == 0 || tR == 3) {
+    if (!hi_done && (tR == 0 || tR == 3)) {
         St qp = fetch(P, ct, wd, i + oi, j + oj, i, j, dir, p0eff);
         qR.rho = qR1.rho - 0.5f * limslope(qR1.rho - qL1.rho, qp.rho - qR1.rho);
         qR.u   = qR1.u   - 0.5f * limslope(qR1.u   - qL1.u,   qp.u   - qR1.u);
@@ -1181,7 +1250,9 @@ def build_source(cfg, nx: int, ny: int) -> str:
         CFL=_f(cfg.cfl),
         SCHEME=_scheme_id(cfg, mode),
         ORDER2=1 if cfg.muscl_order >= 2 else 0,
-        LIM_VA=1 if cfg.limiter.lower().startswith("van") else 0,
+        WENO=1 if cfg.muscl_order >= 5 else 0,
+        LIM={"minmod": 0, "vanalbada": 1, "vanleer": 2,
+             "superbee": 3}.get(cfg.limiter.lower().replace(" ", ""), 0),
         VISC=1 if cfg.viscous else 0,
         TURB=1 if (cfg.turbulence and cfg.viscous) else 0,
         NOSLIP=1 if cfg.wall_type == "noslip" else 0,

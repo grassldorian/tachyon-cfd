@@ -9,6 +9,10 @@ implementation cost, so rounds of work can be planned against it.
 - **Equations** — 2D planar or axisymmetric compressible RANS
   (Favre-averaged Navier–Stokes), finite volume, SSP-RK2 time integration,
   local time stepping for steady-state convergence.
+- **Reconstruction** — 1st order, MUSCL 2nd order, or **WENO5** (low
+  dissipation; preserves shock-cell trains and shear layers far downstream,
+  falls back to MUSCL next to cut-cell walls). Limiters: minmod, van Albada,
+  van Leer, superbee.
 - **Inviscid fluxes** — HLLC / HLL / Roe / AUSM, MUSCL second order with
   minmod or van Albada limiting.
 - **Turbulence** — k-ω SST two-equation model with eddy-viscosity closure,
@@ -127,11 +131,22 @@ out of scope unless requested.
 - **Mesh-independence helper**: with `mesh_scale` in place, an automated
   2-point Richardson check (run at 1× and 1.5×, report the thrust delta)
   quantifies discretization error per engine.
-- **Limiter choice**: ~~van Albada for nozzle work~~ — tried 2026-06: it
-  destabilizes transonic nozzle startups (shock transits the bell, residual
-  stalls); keep minmod. Reducing `inlet_mut_ratio` from 50 to 5–10 is the
-  cheaper dissipation win (the SST inlet eddy viscosity alone costs ~5–8 %
-  of choked mass flow).
+- **Reconstruction / limiters (DONE 2026-06):** added **WENO5** (5th-order,
+  far lower dissipation — preserves ~24 % more downstream shock-cell
+  structure than MUSCL-minmod on the test nozzle) plus **van Leer** and
+  **superbee** limiters. Compressiveness ordering verified (Mach max:
+  minmod < van Albada < van Leer < superbee). WENO5 runs in the interior
+  fluid and falls back to MUSCL at cut-cell walls/edges; default
+  MUSCL/minmod path is numerically unchanged. Note: van Albada still
+  destabilizes transonic startup — start on minmod/van Leer if it stalls.
+  Reducing `inlet_mut_ratio` from 50 to 5–10 is a complementary dissipation
+  win (SST inlet eddy viscosity costs ~5–8 % of choked mass flow).
+- **Downstream mesh stretching (NEXT ROUND):** the grid is uniform
+  (scalar `DX`), so the plume gets throat-resolution everywhere and wastes
+  cells on far ambient. True stretching means replacing the compile-time
+  `DX` with per-cell/face metric arrays across every kernel + the postproc
+  and GUI coordinate mappings — a dedicated architectural round. Biggest
+  remaining lever for resolving long diamond trains cheaply.
 - **Axisymmetric source terms**: verify the geometric source terms at the
   axis are well-behaved as r → 0 with cut cells (diagnostics exist in
   `tests/diag_axi.py`).

@@ -129,7 +129,9 @@ def generate_report(path: str, snap: dict, cfg: SimConfig, *,
             ("Grid", f"{nx} x {ny} cells, dx = {dx*1e3:.4g} mm"),
             ("Mesh density", f"{cfg.mesh_scale:g} x"),
             ("Riemann solver", cfg.flux_scheme.upper()),
-            ("Spatial order", f"{cfg.muscl_order} ({cfg.limiter})"),
+            ("Spatial order",
+             ("WENO5" if cfg.muscl_order >= 5
+              else f"{cfg.muscl_order}") + f" ({cfg.limiter})"),
             ("Turbulence", "k-omega SST" if cfg.turbulence else "off"),
             ("Smooth walls", "cut-cell" if cfg.smooth_boundary else "pixel"),
         ]
