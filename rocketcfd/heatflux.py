@@ -154,12 +154,16 @@ def bartz_heat_flux(ct: np.ndarray, mach: np.ndarray, dx: float,
 
     r_rec = Pr ** (1.0 / 3.0)                  # turbulent recovery factor
     T_aw = T0 * (1.0 + r_rec * half_gm1 * M2) / stag
-    q = h_g * (T_aw - T_wall)
+    q_conv = h_g * (T_aw - T_wall)
+    # gray-gas radiative load from the recovery-temperature gas to the wall
+    emiss = getattr(cfg, "wall_emissivity", 0.0)
+    q_rad = emiss * 5.670374e-8 * (T_aw ** 4 - T_wall ** 4) if emiss > 0 else 0.0
+    q = q_conv + q_rad
 
     return {
         "valid": True,
         "x": xv, "r": rv, "M": Mv,
-        "h_g": h_g, "q": q, "T_aw": T_aw,
+        "h_g": h_g, "q": q, "q_conv": q_conv, "q_rad": q_rad, "T_aw": T_aw,
         "throat_radius": r_t, "throat_area": A_t, "D_t": D_t, "R_c": R_c,
         "c_star": c_star, "x_throat": float(xv[k_t]),
         "q_throat": float(q[k_t]), "q_max": float(np.nanmax(q)),

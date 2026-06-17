@@ -94,7 +94,9 @@ def sweep(png_path: str, cfg: SimConfig, pressures, *, steps: int = 4000,
     pressures = [float(p) for p in pressures]
     mask = load_mask(png_path, cfg.meters_per_pixel, cfg.svg_raster_px,
                      smooth=cfg.smooth_boundary, sigma=cfg.boundary_sigma,
-                     mesh_scale=cfg.mesh_scale)
+                     mesh_scale=cfg.mesh_scale,
+                     axisym_center=(cfg.axisymmetric and
+                                    cfg.axis_location == "center"))
     if mask.n_fluid == 0:
         raise RuntimeError("No fluid cells in the engine image.")
 

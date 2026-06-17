@@ -171,13 +171,29 @@ def _cut_cell_geometry(ctype_img: np.ndarray, sigma: float):
 
 def load_mask(path: str, meters_per_pixel: float, svg_raster_px: int = 1000,
               smooth: bool = True, sigma: float = 1.2,
-              mesh_scale: float = 1.0) -> DomainMask:
+              mesh_scale: float = 1.0,
+              axisym_center: bool = False) -> DomainMask:
     rgb = load_image(path, svg_raster_px)
     if mesh_scale and abs(mesh_scale - 1.0) > 1e-6:
         rgb = resample_rgb(rgb, mesh_scale)
         # keep the physical size fixed: finer mesh -> smaller cells
         meters_per_pixel = meters_per_pixel / mesh_scale
     ny, nx = rgb.shape[:2]
+
+    # Centered axisymmetric runs put the axis on the mid-grid face. That face
+    # only coincides with the image centre when the row count is even; with an
+    # odd row count the solver has to nudge the axis half a cell off centre,
+    # which makes the radii of mirror-image wall rows disagree and the mesh
+    # look lopsided. Duplicating the central row makes the count even while
+    # keeping the geometry exactly symmetric about the new centre face (the
+    # two copies of the old centre row mirror each other, and every outer pair
+    # was already symmetric). mesh_scale resampling can flip the parity, which
+    # is why the asymmetry only showed up for some meshes.
+    if axisym_center and (ny % 2 == 1):
+        mid = ny // 2
+        rgb = np.concatenate([rgb[:mid + 1], rgb[mid:mid + 1], rgb[mid + 1:]],
+                             axis=0)
+        ny += 1
 
     ctype_img = classify_pixels(rgb)
 

@@ -20,17 +20,25 @@ PROPELLANTS = {
     "Air (cold gas)": dict(gamma=1.40, R_gas=287.0, inlet_T0=300.0),
     "H2O (steam)":    dict(gamma=1.33, R_gas=461.5, inlet_T0=1200.0),
     "LOX/RP-1 (kerosene)":    dict(gamma=1.22, R_gas=380.0, inlet_T0=3676.0),
+    "LOX/CH4 (methalox)":     dict(gamma=1.17, R_gas=389.0, inlet_T0=3550.0),
     "LOX/LH2":                dict(gamma=1.20, R_gas=625.0, inlet_T0=3528.0),
     "LOX/Ethanol (75%)":      dict(gamma=1.21, R_gas=348.0, inlet_T0=3140.0),
+    "MMH/NTO (hypergolic)":   dict(gamma=1.25, R_gas=372.0, inlet_T0=3400.0),
     "UDMH/N2O4 (hypergolic)": dict(gamma=1.22, R_gas=352.0, inlet_T0=3415.0),
+    "N2O/HTPB (hybrid)":      dict(gamma=1.24, R_gas=323.0, inlet_T0=3200.0),
+    "H2O2/RP-1":              dict(gamma=1.21, R_gas=375.0, inlet_T0=2900.0),
 }
 
 # (fuel name, oxidizer name, typical O/F mass ratio) for the mass-flow split
 PROPELLANT_MIX = {
     "LOX/RP-1 (kerosene)":    ("RP-1", "LOX", 2.27),
+    "LOX/CH4 (methalox)":     ("CH4", "LOX", 3.6),
     "LOX/LH2":                ("LH2", "LOX", 5.5),
     "LOX/Ethanol (75%)":      ("Ethanol (75%)", "LOX", 1.4),
+    "MMH/NTO (hypergolic)":   ("MMH", "NTO", 2.16),
     "UDMH/N2O4 (hypergolic)": ("UDMH", "N2O4", 2.6),
+    "N2O/HTPB (hybrid)":      ("HTPB", "N2O", 7.0),
+    "H2O2/RP-1":              ("RP-1", "H2O2 (98%)", 7.0),
 }
 
 
@@ -104,6 +112,11 @@ class SimConfig:
     farfield_v: float = 0.0                  # y-velocity [m/s]
 
     # --- Numerics ---
+    wall_emissivity: float = 0.0             # gray-gas radiative emissivity at
+                                             #   the wall [-]; 0 = no radiation.
+                                             #   Adds q_rad = eps*sigma*(T_gas^4
+                                             #   - T_wall^4) to the wall heat
+                                             #   flux (needs no-slip + wall_T>0)
     wall_T: float = 0.0                      # isothermal wall temperature [K];
                                              #   0 = adiabatic. Only acts with
                                              #   no-slip walls (wall-function

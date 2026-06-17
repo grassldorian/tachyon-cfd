@@ -36,7 +36,12 @@ error in absolute Isp today (easily 5–15 %).
 - **DONE (Tier A, 2026-06):** the propellant presets in `config.py` now
   carry CEA/Sutton equilibrium chamber values (γ, R from molar mass, T0)
   at Pc ≈ 70 bar, including a LOX/RP-1 preset validated against the F-1
-  replica in `examples/`.
+  replica in `examples/`. Library expanded to 10 presets — LOX/RP-1,
+  LOX/CH₄ (methalox), LOX/LH₂, LOX/Ethanol, MMH/NTO, UDMH/N₂O₄, N₂O/HTPB
+  (hybrid), H₂O₂/RP-1, plus air and steam — each with matching equilibrium
+  compositions (`thermo.py`) and CEA reactant data (`equilibrium.py`);
+  cross-checked flame temperatures (methalox Tc≈3564 K, MMH/NTO≈3412 K,
+  N₂O/HTPB≈3473 K, H₂O₂/RP-1≈2991 K).
 - **DONE (Tier B, 2026-06):** thermally perfect gas — selectable "Gas
   model" in the GUI. cp(T) of the frozen chamber mixture (JANAF species
   data, CEA chamber compositions in `rocketcfd/thermo.py`), cubic-fitted
@@ -72,9 +77,18 @@ engine (see docs/VALIDATION.md, including the sea-level caveat).
 ("Wall temperature [K], 0=adiab.", Numerics group). With no-slip walls,
 the energy equation loses heat to the wall via q_w = ρ cp u_τ (T−T_w)/T⁺
 (Kader's law) on the embedded cut-cell segments. Verified to cool the
-chamber boundary layer in `tests/test_wall_functions.py`. Future: export
-the q_w distribution as a field for direct comparison with the Bartz page
-in the PDF report.
+chamber boundary layer in `tests/test_wall_functions.py`. The q_w
+distribution is exported as a field ("Wall heat flux [W/m^2]") and overlaid
+against the Bartz page in the PDF report.
+
+**DONE (2026-06): gray-gas wall radiation.** `wall_emissivity` config / GUI
+entry ("Wall emissivity [-], 0=off", Numerics). When ε>0 (with no-slip +
+wall_T>0) the near-wall gas adds a radiative load
+q_rad = ε σ (T_gas⁴ − T_wall⁴) on top of the Kader convective flux, in both
+the kernel (rk_combine) and the Bartz post-processor (`heatflux.py` splits
+`q_conv`/`q_rad`). Verified in `tests/test_radiation.py`: at T_wall=800 K,
+ε=0.3 raises peak wall flux ~13.7 → ~14.9 MW/m². Default ε=0 is
+bit-identical to before.
 
 ### 4. Wall functions or y⁺-aware near-wall treatment — medium impact, medium cost
 
@@ -174,6 +188,16 @@ out of scope unless requested.
 - **Axisymmetric source terms**: verify the geometric source terms at the
   axis are well-behaved as r → 0 with cut cells (diagnostics exist in
   `tests/diag_axi.py`).
+  - **DONE (2026-06): centerline symmetry fix.** The kernel uses a hard 1/r
+    reciprocal, so the axis must sit on a cell face (half-integer `AXISJ`).
+    For an odd interior row count the axis had to be nudged half a cell off
+    the true image center, giving mismatched radii on mirror-image wall rows
+    (a visibly lopsided mesh) — and `mesh_scale` resampling could flip the
+    parity, so it only appeared on some meshes. `load_mask(axisym_center=…)`
+    now duplicates the central row when the count is odd, making it even and
+    exactly symmetric about the true center face. Measured asymmetry on an
+    odd-height symmetric nozzle: 8.3 % → 0.0 %; even-height meshes are
+    unchanged (no regression).
 
 ## Validation cases worth wiring into `tests/`
 

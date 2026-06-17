@@ -93,6 +93,18 @@ REACTANTS = {
     "UDMH/N2O4 (hypergolic)": dict(
         fuel=[({"C": 2, "H": 8, "N": 2}, 60.10, 48300.0)],
         ox=[({"N": 2, "O": 4}, 92.01, -19560.0)], OF=2.6),
+    "LOX/CH4 (methalox)": dict(
+        fuel=[({"C": 1, "H": 4}, 16.04, -89000.0)],     # liquid methane
+        ox=[({"O": 2}, 32.0, -12980.0)], OF=3.6),
+    "MMH/NTO (hypergolic)": dict(
+        fuel=[({"C": 1, "H": 6, "N": 2}, 46.07, 54200.0)],   # MMH (l)
+        ox=[({"N": 2, "O": 4}, 92.01, -19560.0)], OF=2.16),
+    "N2O/HTPB (hybrid)": dict(
+        fuel=[({"C": 4, "H": 6}, 54.09, -50000.0)],     # HTPB (C4H6 unit)
+        ox=[({"N": 2, "O": 1}, 44.01, 82050.0)], OF=7.0),    # N2O (endothermic)
+    "H2O2/RP-1": dict(
+        fuel=[({"C": 1, "H": 1.95}, 13.97, -25000.0)],
+        ox=[({"H": 2, "O": 2}, 34.01, -187800.0)], OF=7.0),  # H2O2 (l)
 }
 
 

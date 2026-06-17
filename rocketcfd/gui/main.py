@@ -1,4 +1,4 @@
-"""RocketCFD GUI — PySide6 + pyqtgraph.
+"""Tachyon CFD GUI — PySide6 + pyqtgraph.
 
 Run with:  python -m rocketcfd.gui   (or python run_gui.py)
 """
@@ -16,7 +16,7 @@ from PySide6.QtGui import (QAction, QColor, QImage, QPalette, QPixmap,
                            QTransform)
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
-    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSizePolicy, QSplitter, QStatusBar, QTabWidget, QVBoxLayout,
     QWidget,
 )
@@ -59,7 +59,9 @@ class SolverWorker(QThread):
                              self.cfg.svg_raster_px,
                              smooth=self.cfg.smooth_boundary,
                              sigma=self.cfg.boundary_sigma,
-                             mesh_scale=self.cfg.mesh_scale)
+                             mesh_scale=self.cfg.mesh_scale,
+                             axisym_center=(self.cfg.axisymmetric and
+                                            self.cfg.axis_location == "center"))
             if mask.n_fluid == 0:
                 raise RuntimeError("No fluid (white) cells found in the image.")
             self.status_msg.emit("Compiling CUDA kernels…")
@@ -121,6 +123,7 @@ FLOAT_FIELDS = [
     ("farfield_p", "Static pressure [Pa]", "Farfield / outlet (edges)"),
     ("farfield_T", "Static temperature [K]", "Farfield / outlet (edges)"),
     ("wall_T", "Wall temperature [K], 0=adiab.", "Numerics"),
+    ("wall_emissivity", "Wall emissivity [-], 0=off", "Numerics"),
     ("cfl", "CFL number [-]", "Numerics"),
     ("residual_target", "Residual target [-]", "Run control"),
 ]
@@ -325,7 +328,7 @@ class ConfigPanel(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RocketCFD — GPU nozzle flow solver")
+        self.setWindowTitle("Tachyon CFD — GPU rocket nozzle solver")
         # restore-size when un-maximized: ~90% of the available screen
         scr = QApplication.primaryScreen()
         if scr is not None:
@@ -349,7 +352,7 @@ class MainWindow(QMainWindow):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(10, 10, 6, 6)
 
-        self.title_lbl = QLabel("RocketCFD")
+        self.title_lbl = QLabel("Tachyon CFD")
         self.subtitle_lbl = QLabel("GPU rocket nozzle flow solver")
         # custom logo: drop a PNG at <project>/assets/logo.png
         self._has_logo = False
@@ -497,9 +500,17 @@ class MainWindow(QMainWindow):
         self.btn_probe.toggled.connect(self.toggle_probe)
         bar.addWidget(self.btn_probe)
         self.btn_theme = QPushButton("◐")
-        self.btn_theme.setFixedWidth(40)
-        self.btn_theme.setToolTip("Invert GUI colors (light / dark)")
-        self.btn_theme.clicked.connect(self.toggle_theme)
+        self.btn_theme.setFixedWidth(52)
+        self.btn_theme.setToolTip("GUI color scheme")
+        theme_menu = QMenu(self.btn_theme)
+        self._theme_actions = []
+        for tname in THEMES:
+            act = QAction(tname, self, checkable=True)
+            act.setChecked(tname == ACTIVE_THEME[0])
+            act.triggered.connect(lambda _=False, n=tname: self.set_theme(n))
+            theme_menu.addAction(act)
+            self._theme_actions.append(act)
+        self.btn_theme.setMenu(theme_menu)
         bar.addWidget(self.btn_theme)
         self.lvl_min = QLineEdit("0"); self.lvl_min.setMaximumWidth(90)
         self.lvl_max = QLineEdit("1"); self.lvl_max.setMaximumWidth(90)
@@ -801,9 +812,11 @@ class MainWindow(QMainWindow):
             mask = load_mask(path, cfg.meters_per_pixel, cfg.svg_raster_px,
                              smooth=cfg.smooth_boundary,
                              sigma=cfg.boundary_sigma,
-                             mesh_scale=cfg.mesh_scale)
+                             mesh_scale=cfg.mesh_scale,
+                             axisym_center=(cfg.axisymmetric and
+                                            cfg.axis_location == "center"))
         except Exception as e:
-            QMessageBox.critical(self, "RocketCFD", f"Could not load image:\n{e}")
+            QMessageBox.critical(self, "Tachyon CFD", f"Could not load image:\n{e}")
             return
         self.dx = mask.dx
         self.img_nx, self.img_ny = mask.nx, mask.ny
@@ -875,18 +888,18 @@ class MainWindow(QMainWindow):
 
     def initialize(self):
         if not self.png_path:
-            QMessageBox.information(self, "RocketCFD", "Load a nozzle PNG first.")
+            QMessageBox.information(self, "Tachyon CFD", "Load a nozzle PNG first.")
             return
         try:
             cfg = self.cfg_panel.get_config()
         except ValueError as e:
-            QMessageBox.warning(self, "RocketCFD", str(e))
+            QMessageBox.warning(self, "Tachyon CFD", str(e))
             return
         if cfg.gas_model.lower().startswith("equilibrium"):
             from ..equilibrium import REACTANTS
             if cfg.propellant not in REACTANTS:
                 QMessageBox.information(
-                    self, "RocketCFD",
+                    self, "Tachyon CFD",
                     "Equilibrium mode needs a propellant selection\n"
                     "(e.g. LOX/RP-1, LOX/LH2, LOX/Ethanol or UDMH/N2O4).")
                 return
@@ -1096,11 +1109,20 @@ class MainWindow(QMainWindow):
         Y = np.concatenate([np.tile([y0, y1], len(xv)), np.repeat(yv, 2)])
         self.mesh_grid.setData(X, Y)
 
-    def toggle_theme(self):
-        self.dark_mode = not self.dark_mode
-        apply_claude_theme(QApplication.instance(), self.dark_mode)
+    def set_theme(self, name: str):
+        """Switch to a named color scheme from THEMES."""
+        apply_claude_theme(QApplication.instance(), name)
+        self.dark_mode = ACTIVE_DARK[0]
         self._apply_widget_theme()
-        self.btn_theme.setText("◐")
+        for act in getattr(self, "_theme_actions", []):
+            act.setChecked(act.text() == ACTIVE_THEME[0])
+        self.statusBar().showMessage(f"Color scheme: {name}", 2000)
+
+    def toggle_theme(self):
+        """Cycle to the next scheme (kept for back-compat / keyboard use)."""
+        names = list(THEMES)
+        i = (names.index(ACTIVE_THEME[0]) + 1) % len(names)
+        self.set_theme(names[i])
 
     def _apply_widget_theme(self):
         """Re-style the pyqtgraph widgets and themed labels at runtime."""
@@ -1251,7 +1273,7 @@ class MainWindow(QMainWindow):
             try:
                 self.cfg_panel.get_config().save(path)
             except ValueError as e:
-                QMessageBox.warning(self, "RocketCFD", str(e))
+                QMessageBox.warning(self, "Tachyon CFD", str(e))
 
     def load_config(self):
         path, _ = QFileDialog.getOpenFileName(self, "Load config", "", "JSON (*.json)")
@@ -1260,7 +1282,7 @@ class MainWindow(QMainWindow):
 
     def export_npz(self):
         if self.worker is None or self.worker.solver is None:
-            QMessageBox.information(self, "RocketCFD", "Initialize and run the solver first.")
+            QMessageBox.information(self, "Tachyon CFD", "Initialize and run the solver first.")
             return
         path, _ = QFileDialog.getSaveFileName(self, "Export fields", "fields.npz", "NumPy (*.npz)")
         if path:
@@ -1278,7 +1300,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------- sweep / report / video
     def open_sweep(self):
         if not self.png_path:
-            QMessageBox.information(self, "RocketCFD", "Load an engine first.")
+            QMessageBox.information(self, "Tachyon CFD", "Load an engine first.")
             return
         if self.sweep_dialog is None:
             from .sweep_tools import SweepDialog
@@ -1289,7 +1311,7 @@ class MainWindow(QMainWindow):
     def export_report(self):
         if self.last_snap is None or self.mask_ct is None:
             QMessageBox.information(
-                self, "RocketCFD", "Initialize and run the solver first.")
+                self, "Tachyon CFD", "Initialize and run the solver first.")
             return
         name = Path(self.png_path).stem if self.png_path else "engine"
         path, _ = QFileDialog.getSaveFileName(
@@ -1323,7 +1345,7 @@ class MainWindow(QMainWindow):
     def export_mp4(self):
         if len(self.replay_frames) < 2:
             QMessageBox.information(
-                self, "RocketCFD",
+                self, "Tachyon CFD",
                 "Run the solver first — the replay recorder needs at least "
                 "two frames before a video can be exported.")
             return
@@ -1381,7 +1403,11 @@ class MainWindow(QMainWindow):
                 self.worker.running = was
 
 
-# ---- Claude visual style: warm surfaces, terracotta accent; light + dark ----
+# ---- GUI color schemes -----------------------------------------------------
+# Each palette is a flat dict of named colors consumed by build_qss / the
+# pyqtgraph widgets. ``is_dark`` only selects the light/dark logo variant.
+# Claude warm light + dark (terracotta accent) are the originals; Mono,
+# Blueprint and Midnight are the alternative schemes offered in the toolbar.
 LIGHT_COLORS = dict(
     bg="#FAF9F5", panel="#F0EEE5", card="#FFFFFF",
     border="#E3DFD3", border2="#D5D0C2",
@@ -1389,7 +1415,7 @@ LIGHT_COLORS = dict(
     accent="#D97757", accent_h="#CB6B4A", accent_p="#B85B3E",
     accent_dis="#E9C9BA", btn_press="#E8E4D8", text_dis="#B5B1A5",
     plot_fg="#57534A", perf="#B0522F", axis_line="#0E7490",
-    scalebar=(40, 40, 38, 220),
+    scalebar=(40, 40, 38, 220), is_dark=False,
 )
 DARK_COLORS = dict(
     bg="#262624", panel="#30302E", card="#1F1E1D",
@@ -1398,12 +1424,52 @@ DARK_COLORS = dict(
     accent="#D97757", accent_h="#E08D6D", accent_p="#B85B3E",
     accent_dis="#6E4434", btn_press="#3A3936", text_dis="#6F6C64",
     plot_fg="#C2BEB3", perf="#E5926F", axis_line="#33C6E8",
-    scalebar=(235, 233, 226, 220),
+    scalebar=(235, 233, 226, 220), is_dark=True,
 )
+# Mono — clean black & white: pure surfaces, neutral grays, ink-black accent.
+MONO_COLORS = dict(
+    bg="#FFFFFF", panel="#F4F4F4", card="#FFFFFF",
+    border="#DDDDDD", border2="#C4C4C4",
+    text="#0A0A0A", subtext="#6B6B6B",
+    accent="#1A1A1A", accent_h="#3A3A3A", accent_p="#000000",
+    accent_dis="#BDBDBD", btn_press="#E6E6E6", text_dis="#B0B0B0",
+    plot_fg="#2A2A2A", perf="#000000", axis_line="#666666",
+    scalebar=(20, 20, 20, 220), is_dark=False,
+)
+# Blueprint — cool engineering light: slate paper, drafting-blue accent.
+BLUEPRINT_COLORS = dict(
+    bg="#F3F6FB", panel="#E6EDF6", card="#FFFFFF",
+    border="#D3DEEC", border2="#BCCBE1",
+    text="#15202E", subtext="#5B6B82",
+    accent="#2D6CDF", accent_h="#1E5BC6", accent_p="#194FA8",
+    accent_dis="#B3C8EC", btn_press="#DCE5F2", text_dis="#9AA7B8",
+    plot_fg="#46566B", perf="#1E5BC6", axis_line="#0E7490",
+    scalebar=(22, 32, 46, 220), is_dark=False,
+)
+# Midnight — dark oscilloscope: deep navy surfaces, cyan accent, green perf.
+MIDNIGHT_COLORS = dict(
+    bg="#0E1419", panel="#16202A", card="#0A0F14",
+    border="#243341", border2="#314556",
+    text="#E6F1F5", subtext="#8CA3B0",
+    accent="#0E7490", accent_h="#1196B5", accent_p="#0A5A73",
+    accent_dis="#1C4954", btn_press="#1B2935", text_dis="#5A6E7A",
+    plot_fg="#BCD3DC", perf="#34D399", axis_line="#22D3EE",
+    scalebar=(220, 235, 240, 220), is_dark=True,
+)
+
+# Ordered registry the toolbar picker iterates over (display name -> palette).
+THEMES = {
+    "Claude Light": LIGHT_COLORS,
+    "Claude Dark": DARK_COLORS,
+    "Mono (B&W)": MONO_COLORS,
+    "Blueprint": BLUEPRINT_COLORS,
+    "Midnight": MIDNIGHT_COLORS,
+}
 
 # module-level so MainWindow can read the active palette
 ACTIVE_COLORS = dict(LIGHT_COLORS)
 ACTIVE_DARK = [False]                 # mutable: set by apply_claude_theme
+ACTIVE_THEME = ["Claude Light"]       # mutable: current theme name
 
 # kept for back-compat with the QSS template below
 C_BG      = "{bg}"
@@ -1510,11 +1576,29 @@ def build_qss(c: dict) -> str:
     return qss
 
 
-def apply_claude_theme(app: QApplication, dark: bool = False):
-    c = DARK_COLORS if dark else LIGHT_COLORS
+def _resolve_theme(theme):
+    """Map a theme name / palette dict / legacy bool to (name, palette)."""
+    if isinstance(theme, dict):
+        return ACTIVE_THEME[0], theme
+    if isinstance(theme, bool):                       # legacy dark=True/False
+        name = "Claude Dark" if theme else "Claude Light"
+        return name, THEMES[name]
+    if isinstance(theme, str) and theme in THEMES:
+        return theme, THEMES[theme]
+    return "Claude Light", THEMES["Claude Light"]
+
+
+def apply_claude_theme(app: QApplication, theme=None, *, dark=None):
+    """Apply a color scheme. ``theme`` is a THEMES name, a palette dict, or a
+    legacy bool (True=Claude Dark, False=Claude Light). The legacy ``dark=``
+    keyword is still accepted."""
+    if theme is None:
+        theme = bool(dark) if dark is not None else "Claude Light"
+    name, c = _resolve_theme(theme)
     ACTIVE_COLORS.clear()
     ACTIVE_COLORS.update(c)
-    ACTIVE_DARK[0] = dark
+    ACTIVE_DARK[0] = bool(c.get("is_dark", False))
+    ACTIVE_THEME[0] = name
     app.setStyle("Fusion")
     pal = QPalette()
     pal.setColor(QPalette.Window, QColor(c["bg"]))
@@ -1539,7 +1623,7 @@ apply_dark_theme = apply_claude_theme
 
 def main():
     app = QApplication(sys.argv)
-    apply_claude_theme(app, dark=True)
+    apply_claude_theme(app, "Mono (B&W)")
     win = MainWindow()
     win.showMaximized()
     sys.exit(app.exec())

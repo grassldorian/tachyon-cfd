@@ -43,7 +43,9 @@ def main():
         cfg.mesh_scale = args.mesh
     mask = load_mask(args.png, cfg.meters_per_pixel, cfg.svg_raster_px,
                      smooth=cfg.smooth_boundary, sigma=cfg.boundary_sigma,
-                     mesh_scale=cfg.mesh_scale)
+                     mesh_scale=cfg.mesh_scale,
+                     axisym_center=(cfg.axisymmetric and
+                                    cfg.axis_location == "center"))
     print(f"grid {mask.nx}x{mask.ny}: {mask.n_fluid} fluid cells, "
           f"{mask.n_inlet} inlet cells, dx={mask.dx*1000:.3f} mm, "
           f"{'axisymmetric (' + cfg.axis_location + ')' if cfg.axisymmetric else 'planar 2D'}, "

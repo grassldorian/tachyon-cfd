@@ -64,6 +64,8 @@ _CUDA_SRC = Template(r"""
 #define NOSLIP    $NOSLIP
 #define WALLTH    $WALLTH
 #define WALL_TW   $WALL_TW
+#define RADWALL   $RADWALL
+#define WEMISS    $WEMISS
 #define STRETCH   $STRETCH
 #define CARBFIX    $CARBFIX
 #define COMPCORR   $COMPCORR
@@ -1109,7 +1111,13 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
             const float cpw = CPG;
 #endif
             float qw = rhoc * cpw * fmaxf(ut2, 1.0e-6f)
-                     * (PF(4,c) - WALL_TW) / tp;
+                     * (PF(4,c) - WALL_TW) / tp;     // convective (Kader)
+#if RADWALL
+            // gray-gas radiative load from the near-wall gas to the wall
+            float Tg = PF(4,c);
+            qw += WEMISS * 5.670374e-8f
+                * (Tg*Tg*Tg*Tg - WALL_TW*WALL_TW*WALL_TW*WALL_TW);
+#endif
             rhs[3] -= qw * area / DX;
             QW[c] = qw;                       // diagnostic: wall heat flux
 #endif
@@ -1296,6 +1304,12 @@ def axis_j(cfg, ny: int) -> float:
 
     Interior rows occupy j = 2 .. ny+1. 'top'/'bottom' put the axis on the
     image edge (symmetry plane); 'center' puts it mid-image.
+
+    For an even row count the mid-image position is a half-integer (a cell
+    face), so no cell centre lands on r=0 and the grid is symmetric about the
+    axis. ``load_mask(axisym_center=True)`` guarantees the even count for real
+    runs; the half-cell nudge below only fires on the odd-count fallback (e.g.
+    raw test masks) to keep the hard 1/r reciprocal in the kernel finite.
     """
     loc = getattr(cfg, "axis_location", "center")
     if loc == "top":
@@ -1303,7 +1317,7 @@ def axis_j(cfg, ny: int) -> float:
     if loc == "bottom":
         return ny + 1.5
     a = 2.0 + ny / 2.0 - 0.5
-    if abs(a - round(a)) < 0.25:        # odd ny: nudge off the cell centers
+    if abs(a - round(a)) < 0.25:        # odd ny fallback: nudge off cell centres
         a += 0.5
     return a
 
@@ -1413,6 +1427,10 @@ def build_source(cfg, nx: int, ny: int) -> str:
         WALLTH=1 if (getattr(cfg, "wall_T", 0.0) > 0.0
                      and cfg.wall_type == "noslip" and cfg.viscous) else 0,
         WALL_TW=_f(max(getattr(cfg, "wall_T", 0.0), 1.0)),
+        RADWALL=1 if (getattr(cfg, "wall_emissivity", 0.0) > 0.0
+                      and getattr(cfg, "wall_T", 0.0) > 0.0
+                      and cfg.wall_type == "noslip" and cfg.viscous) else 0,
+        WEMISS=_f(getattr(cfg, "wall_emissivity", 0.0)),
         STRETCH=1 if getattr(cfg, "plume_stretch", 1.0) > 1.0 + 1e-6 else 0,
         CARBFIX=1 if getattr(cfg, "carbuncle_fix", True) else 0,
         COMPCORR=1 if getattr(cfg, "compressibility_correction", False) else 0,
