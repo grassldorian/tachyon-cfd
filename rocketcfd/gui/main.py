@@ -1428,15 +1428,17 @@ DARK_COLORS = dict(
     plot_fg="#C2BEB3", perf="#E5926F", axis_line="#33C6E8",
     scalebar=(235, 233, 226, 220), is_dark=True,
 )
-# Mono — clean black & white: pure surfaces, neutral grays, ink-black accent.
+# Mono — clean black & white, dark: near-black surfaces, neutral grays, a
+# bright white accent (black ink on it). The default theme.
 MONO_COLORS = dict(
-    bg="#FFFFFF", panel="#F4F4F4", card="#FFFFFF",
-    border="#DDDDDD", border2="#C4C4C4",
-    text="#0A0A0A", subtext="#6B6B6B",
-    accent="#1A1A1A", accent_h="#3A3A3A", accent_p="#000000",
-    accent_dis="#BDBDBD", btn_press="#E6E6E6", text_dis="#B0B0B0",
-    plot_fg="#2A2A2A", perf="#000000", axis_line="#666666",
-    scalebar=(20, 20, 20, 220), is_dark=False,
+    bg="#0A0A0A", panel="#1A1A1A", card="#121212",
+    border="#2C2C2C", border2="#454545",
+    text="#F2F2F2", subtext="#9C9C9C",
+    accent="#F0F0F0", accent_h="#FFFFFF", accent_p="#CFCFCF",
+    accent_text="#0A0A0A",                       # dark text on the light accent
+    accent_dis="#BDBDBD", btn_press="#232323", text_dis="#5A5A5A",
+    plot_fg="#D6D6D6", perf="#FFFFFF", axis_line="#A0A0A0",
+    scalebar=(235, 235, 235, 220), is_dark=True,
 )
 # Blueprint — cool engineering light: slate paper, drafting-blue accent.
 BLUEPRINT_COLORS = dict(
@@ -1487,6 +1489,7 @@ C_CARD    = "{card}"
 C_BTNPRESS = "{btn_press}"
 C_TEXTDIS = "{text_dis}"
 C_ACCENTDIS = "{accent_dis}"
+C_ACCENTTEXT = "{accent_text}"        # text/selection color on the accent fill
 
 CLAUDE_QSS_TEMPLATE = f"""
 QMainWindow, QDialog {{ background: {C_BG}; }}
@@ -1502,7 +1505,7 @@ QGroupBox::title {{
 QLineEdit {{
     background: {C_CARD}; border: 1px solid {C_BORDER2}; border-radius: 6px;
     padding: 3px 7px; selection-background-color: {C_ACCENT};
-    selection-color: #FFFFFF;
+    selection-color: {C_ACCENTTEXT};
 }}
 QLineEdit:focus {{ border: 1px solid {C_ACCENT}; }}
 QComboBox {{
@@ -1513,7 +1516,7 @@ QComboBox:focus {{ border: 1px solid {C_ACCENT}; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{
     background: {C_CARD}; border: 1px solid {C_BORDER2};
-    selection-background-color: {C_ACCENT}; selection-color: #FFFFFF;
+    selection-background-color: {C_ACCENT}; selection-color: {C_ACCENTTEXT};
 }}
 QPushButton {{
     background: {C_CARD}; border: 1px solid {C_BORDER2}; border-radius: 8px;
@@ -1523,12 +1526,12 @@ QPushButton:hover {{ background: {C_PANEL}; }}
 QPushButton:pressed {{ background: {C_BTNPRESS}; }}
 QPushButton:disabled {{ color: {C_TEXTDIS}; background: {C_BG}; }}
 QPushButton[accent="true"] {{
-    background: {C_ACCENT}; color: #FFFFFF; border: none; font-weight: 600;
+    background: {C_ACCENT}; color: {C_ACCENTTEXT}; border: none; font-weight: 600;
 }}
 QPushButton[accent="true"]:hover {{ background: {C_ACCENT_H}; }}
 QPushButton[accent="true"]:pressed,
 QPushButton[accent="true"]:checked {{ background: {C_ACCENT_P}; }}
-QPushButton[accent="true"]:disabled {{ background: {C_ACCENTDIS}; color: #FFFFFF; }}
+QPushButton[accent="true"]:disabled {{ background: {C_ACCENTDIS}; color: {C_ACCENTTEXT}; }}
 QCheckBox {{ spacing: 6px; }}
 QCheckBox::indicator {{
     width: 15px; height: 15px; border: 1px solid {C_BORDER2};
@@ -1572,6 +1575,9 @@ QToolTip {{
 
 def build_qss(c: dict) -> str:
     qss = CLAUDE_QSS_TEMPLATE
+    # accent_text (color on the accent fill) defaults to white; only the
+    # light-accent themes (e.g. inverted Mono) override it with a dark ink.
+    c = {"accent_text": "#FFFFFF", **c}
     for k, v in c.items():
         if isinstance(v, str):
             qss = qss.replace("{" + k + "}", v)
@@ -1611,7 +1617,7 @@ def apply_claude_theme(app: QApplication, theme=None, *, dark=None):
     pal.setColor(QPalette.Button, QColor(c["card"]))
     pal.setColor(QPalette.ButtonText, QColor(c["text"]))
     pal.setColor(QPalette.Highlight, QColor(c["accent"]))
-    pal.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+    pal.setColor(QPalette.HighlightedText, QColor(c.get("accent_text", "#FFFFFF")))
     pal.setColor(QPalette.PlaceholderText, QColor(c["subtext"]))
     app.setPalette(pal)
     app.setStyleSheet(build_qss(c))
