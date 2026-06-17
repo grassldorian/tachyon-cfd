@@ -6,7 +6,7 @@
 ; Output: installer_out\TachyonCFD-Setup-<version>.exe
 
 #define AppName "Tachyon CFD"
-#define AppVersion "7.0"
+#define AppVersion "0.1-beta"
 #define AppExe "TachyonCFD.exe"
 
 [Setup]
