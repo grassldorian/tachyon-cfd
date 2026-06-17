@@ -49,6 +49,7 @@ class SolverWorker(QThread):
         self.cfg = cfg
         self.running = False          # paused vs running
         self.stop_requested = False
+        self.run_until_converged = False  # auto-stop when thrust flattens
         self.solver = None
 
     def run(self):
@@ -88,12 +89,26 @@ class SolverWorker(QThread):
                 self.snapshot_ready.emit(snap)
                 if self.solver.step_count >= self.cfg.max_steps:
                     self.running = False
+                    self.run_until_converged = False
                     self.status_msg.emit(f"Reached max steps ({self.cfg.max_steps}).")
                 elif self.solver.residual < self.cfg.residual_target:
                     self.running = False
+                    self.run_until_converged = False
                     self.status_msg.emit(
                         f"Converged: residual {self.solver.residual:.2e} "
                         f"< {self.cfg.residual_target:.0e}")
+                elif self.run_until_converged:
+                    # auto-stop once the thrust history has flattened (the
+                    # practical steady-state signal — the density residual
+                    # often plateaus on unsteady plumes and never hits target)
+                    from ..postproc import thrust_convergence
+                    conv, rel = thrust_convergence(self.solver.thrust_history)
+                    if conv and self.solver.step_count >= self.cfg.inlet_ramp_steps:
+                        self.running = False
+                        self.run_until_converged = False
+                        self.status_msg.emit(
+                            f"Thrust converged (±{rel*100:.2f}%) at step "
+                            f"{self.solver.step_count:,}.")
             except Exception:
                 self.running = False
                 self.error.emit(traceback.format_exc())
@@ -245,6 +260,17 @@ class ConfigPanel(QWidget):
         num.addRow(self.localdt_chk)
         num.addRow(self.carbuncle_chk)
         num.addRow(self.compcorr_chk)
+
+        runc = form("Run control")
+        self.btn_run_conv = QPushButton("▶︎  Run until converged")
+        self.btn_run_conv.setEnabled(False)      # enabled once the solver inits
+        self.btn_run_conv.setToolTip(
+            "Run continuously and stop automatically when the thrust history\n"
+            "flattens (peak-to-peak < 0.5% over the last 10% of the run), or\n"
+            "at 'Max steps', whichever comes first. The density residual often\n"
+            "plateaus on unsteady plumes, so thrust flatness is the practical\n"
+            "steady-state signal.")
+        runc.addRow(self.btn_run_conv)
 
         note = QLabel("Changes take effect on  ⟲ Initialize.")
         note.setStyleSheet("color: #888; font-style: italic;")
@@ -423,6 +449,7 @@ class MainWindow(QMainWindow):
         ll.addWidget(perf_box)
 
         self.cfg_panel = ConfigPanel(SimConfig())
+        self.cfg_panel.btn_run_conv.clicked.connect(self.run_until_convergence)
         self.cfg_panel.axi_chk.toggled.connect(lambda _: self._update_geometry())
         self.cfg_panel.axis_combo.currentIndexChanged.connect(
             lambda _: self._update_geometry())
@@ -916,9 +943,12 @@ class MainWindow(QMainWindow):
         self.worker.status_msg.connect(lambda m: self.statusBar().showMessage(m, 15000))
         self.worker.error.connect(self.on_error)
         self.worker.initialized.connect(lambda: self.btn_run.setEnabled(True))
+        self.worker.initialized.connect(
+            lambda: self.cfg_panel.btn_run_conv.setEnabled(True))
         self.btn_run.setChecked(False)
         self.btn_run.setText("▶︎  Run")
         self.btn_run.setEnabled(False)
+        self.cfg_panel.btn_run_conv.setEnabled(False)
         self.statusBar().showMessage("Initializing solver (CUDA compile)…")
         self.worker.start()
 
@@ -927,7 +957,21 @@ class MainWindow(QMainWindow):
             self.btn_run.setChecked(False)
             return
         self.worker.running = checked
+        # a manual run/pause cancels the auto run-until-converged mode
+        self.worker.run_until_converged = False
         self.btn_run.setText("⏸︎  Pause" if checked else "▶︎  Run")
+
+    def run_until_convergence(self):
+        """Run continuously until the thrust history flattens (or max steps)."""
+        if self.worker is None:
+            QMessageBox.information(self, "Tachyon CFD",
+                                   "Press Initialize first.")
+            return
+        self.worker.run_until_converged = True
+        self.worker.running = True
+        self.btn_run.setChecked(True)
+        self.btn_run.setText("⏸︎  Pause")
+        self.statusBar().showMessage("Running until the thrust converges…")
 
     def shutdown_worker(self):
         if self.worker is not None:
@@ -944,6 +988,12 @@ class MainWindow(QMainWindow):
     @Slot(dict)
     def on_snapshot(self, snap: dict):
         self.last_snap = snap
+        # reflect a worker auto-stop (convergence / max steps / residual) in the
+        # Run button so it doesn't stay stuck on "Pause"
+        if (self.worker is not None and not self.worker.running
+                and self.btn_run.isChecked()):
+            self.btn_run.setChecked(False)
+            self.btn_run.setText("▶︎  Run")
         self._setup_stretch_display(snap)
         meta = snap["meta"]
         self.lbl_step.setText(f"step {meta['step']:,}")

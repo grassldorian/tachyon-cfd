@@ -203,6 +203,14 @@ When to stop and how often to refresh.
 - **Max steps** — hard cap on iterations regardless of residual.
 - **GUI update every N steps** — snapshot/redraw cadence. Larger = faster
   (less time spent drawing), smaller = smoother live animation.
+- **▶︎ Run until converged** — runs continuously and stops automatically when
+  the **thrust** flattens (peak-to-peak < 0.5 % over the last 10 % of the run),
+  or at *Max steps*, whichever comes first. This is usually what you want for a
+  steady performance number: the density residual often plateaus on unsteady
+  plumes and never reaches *Residual target*, whereas thrust flatness is the
+  practical "it's done" signal (it's the same criterion as the green
+  **Convergence** indicator in the performance box). Pressing **Run/Pause**
+  cancels the auto mode. Enabled once you've pressed **⟲ Initialize**.
 
 ---
 
