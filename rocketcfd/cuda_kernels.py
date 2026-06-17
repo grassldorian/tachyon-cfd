@@ -1165,6 +1165,73 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
     U[3*NC+c] = E;  U[4*NC+c] = rk;    U[5*NC+c] = rw;
 }
 
+// -------------------------------------------------------- scalar_transport
+// Two-gamma plume mixing: transport the exhaust mass fraction Z (1 = pure
+// exhaust, 0 = ambient air) as a conserved scalar rho*Z. It rides the SAME
+// face mass fluxes (FX[0], FY[0]) the density used, so it is conservative and
+// consistent with the flow; turbulent diffusion (Sc_t = 0.7) spreads it
+// across the shear layer. Double-buffered (UZin -> UZout) to avoid races.
+// Fully decoupled: launched only when two-gamma is on, changes nothing else.
+__global__ void scalar_transport(const float* U, const float* UZ0,
+        const float* UZin, float* UZout, const float* FX, const float* FY,
+        const float* P, const float* AXF, const float* AYF, const float* LAM,
+        const float* dtl, const unsigned char* ct, float* Zf,
+        float ca, float cb, float cc)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i < 2 || j < 2 || i >= NX + 2 || j >= NY + 2) return;
+    int c = IDX(i, j);
+    if (ct[c] != 0) { UZout[c] = 0.0f; Zf[c] = 0.0f; return; }
+    int cE = IDX(i+1,j), cN = IDX(i,j+1), cW = IDX(i-1,j), cS = IDX(i,j-1);
+    float dxi = 1.0f / DX;
+#if STRETCH
+    float dxix = 1.0f / (DX * SXW[i]);
+#else
+    float dxix = dxi;
+#endif
+    float dt = dtl[c];
+    float aw = AXF[c], ae = AXF[cE], asf = AYF[c], an = AYF[cN];
+    float li = 1.0f / fmaxf(LAM[c], 0.25f);
+    float rho_c = fmaxf(U[0*NC+c], RHOMIN);
+    float Zc = fminf(fmaxf(UZin[c] / rho_c, 0.0f), 1.0f);
+    // neighbour mixture fraction with ghost rules: inlet = 1 (exhaust),
+    // farfield/outlet/wall = 0 (air; walls carry ~zero aperture flux anyway)
+    #define ZG(nb) ( ct[nb]==0 ? \
+        fminf(fmaxf(UZin[nb] / fmaxf(U[0*NC+nb], RHOMIN), 0.0f), 1.0f) \
+        : (ct[nb]==2 ? 1.0f : 0.0f) )
+    float Zw = ZG(cW), Ze = ZG(cE), Zs = ZG(cS), Zn = ZG(cN);
+    // advective Z-flux on each face = (mass flux) * (upwind Z)
+    float mfw = FX[0*NC+c], mfe = FX[0*NC+cE];
+    float mfs = FY[0*NC+c], mfn = FY[0*NC+cN];
+    float fzw = mfw * (mfw >= 0.0f ? Zw : Zc);
+    float fze = mfe * (mfe >= 0.0f ? Zc : Ze);
+    float fzs = mfs * (mfs >= 0.0f ? Zs : Zc);
+    float fzn = mfn * (mfn >= 0.0f ? Zc : Zn);
+    float rhsZ;
+#if AXI
+    float rc = RCELL(j), rci = 1.0f / rc;
+    float rfS = RFACE(j) * rci, rfN = RFACE(j+1) * rci;
+    rhsZ = (aw*fzw - ae*fze) * dxix + (rfS*asf*fzs - rfN*an*fzn) * dxi;
+#else
+    rhsZ = (aw*fzw - ae*fze) * dxix + (asf*fzs - an*fzn) * dxi;
+#endif
+    // turbulent diffusion of Z (Sc_t = 0.7), fluid-fluid faces only
+    const float SCTI = 1.0f / 0.7f;
+    float mutc = fmaxf(P[8*NC+c], 0.0f);
+    float diff = 0.0f;
+    if (ct[cW]==0) diff += aw*0.5f*(mutc+fmaxf(P[8*NC+cW],0.0f))*SCTI*(Zw-Zc)*dxix*dxix;
+    if (ct[cE]==0) diff += ae*0.5f*(mutc+fmaxf(P[8*NC+cE],0.0f))*SCTI*(Ze-Zc)*dxix*dxix;
+    if (ct[cS]==0) diff += asf*0.5f*(mutc+fmaxf(P[8*NC+cS],0.0f))*SCTI*(Zs-Zc)*dxi*dxi;
+    if (ct[cN]==0) diff += an*0.5f*(mutc+fmaxf(P[8*NC+cN],0.0f))*SCTI*(Zn-Zc)*dxi*dxi;
+    rhsZ = (rhsZ + diff) * li;
+    float UZn = ca*UZ0[c] + cb*UZin[c] + cc*dt*rhsZ;
+    float Z = fminf(fmaxf(UZn / rho_c, 0.0f), 1.0f);
+    UZout[c] = Z * rho_c;
+    Zf[c] = Z;
+    #undef ZG
+}
+
 } // extern "C"
 """)
 
@@ -1352,7 +1419,7 @@ class KernelSet:
         bx, by = self.BLOCK
         self.grid = ((self.sx + bx - 1) // bx, (self.sy + by - 1) // by)
         for name in ("cons2prim", "halo_fill", "gradients", "turb_visc",
-                     "fluxes", "sst_source", "rk_combine"):
+                     "fluxes", "sst_source", "rk_combine", "scalar_transport"):
             setattr(self, name, self.module.get_function(name))
 
     def launch(self, kernel, *args):

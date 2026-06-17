@@ -115,6 +115,8 @@ FLOAT_FIELDS = [
     ("inlet_p0", "Total pressure p₀ [Pa]", "Chamber inlet (blue)"),
     ("inlet_T0", "Total temperature T₀ [K]", "Chamber inlet (blue)"),
     ("eta_cstar", "Combustion eff. η_c* [-]", "Chamber inlet (blue)"),
+    ("ambient_gamma", "Ambient gas γ [-]", "Gas"),
+    ("ambient_R", "Ambient gas R [J/(kg·K)]", "Gas"),
     ("inlet_turb_intensity", "Turbulence intensity [-]", "Chamber inlet (blue)"),
     ("farfield_p", "Static pressure [Pa]", "Farfield / outlet (edges)"),
     ("farfield_T", "Static temperature [K]", "Farfield / outlet (edges)"),
@@ -190,6 +192,13 @@ class ConfigPanel(QWidget):
         self.prop_combo.addItems(["Custom"] + list(PROPELLANTS.keys()))
         self.prop_combo.activated.connect(self._apply_propellant)
         gas.insertRow(0, "Propellant", self.prop_combo)
+        self.twogamma_chk = QCheckBox("Two-gamma plume mixing (exhaust + air)")
+        self.twogamma_chk.setToolTip(
+            "Transport an exhaust mass fraction and blend the gas properties\n"
+            "between the exhaust and the ambient air across the plume mixing\n"
+            "layer. Adds 'Mixture fraction' and 'Local gamma' fields. The\n"
+            "engine core (pure exhaust) is unchanged.")
+        gas.addRow(self.twogamma_chk)
 
         num = form("Numerics")
         self.flux_combo = QComboBox()
@@ -264,6 +273,7 @@ class ConfigPanel(QWidget):
         self.gasmodel_combo.setCurrentIndex(
             2 if gm.startswith("equilibrium")
             else 1 if gm.startswith("thermally") else 0)
+        self.twogamma_chk.setChecked(bool(cfg.two_gamma))
 
     def get_config(self) -> SimConfig:
         cfg = SimConfig()
@@ -291,6 +301,7 @@ class ConfigPanel(QWidget):
         cfg.propellant = self.prop_combo.currentText()
         cfg.gas_model = ["calorically perfect", "thermally perfect",
                          "equilibrium"][self.gasmodel_combo.currentIndex()]
+        cfg.two_gamma = self.twogamma_chk.isChecked()
         return cfg
 
 
@@ -439,6 +450,7 @@ class MainWindow(QMainWindow):
             "Turb. kinetic energy k [m^2/s^2]", "Specific dissipation omega [1/s]",
             "Eddy viscosity ratio mu_t/mu [-]", "Schlieren |grad rho|",
             "Wall heat flux [W/m^2]",
+            "Mixture fraction [-]", "Local gamma [-]",
         ])
         self.field_combo.currentTextChanged.connect(self.refresh_view)
         bar.addWidget(self.field_combo)

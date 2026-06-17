@@ -110,10 +110,20 @@ item (integral thrust/Isp are much less affected).
 
 ### 6. Multi-species plume mixing — lower impact for thrust, high cost
 
-Thrust hardly cares, but plume structure does: exhaust (low γ, hot, light)
-mixing into ambient air is currently one gas. A passive scalar with distinct
-γ/R blending (two-gamma model) gets a more realistic shear layer and
-afterburning-free plume shape for a moderate kernel change.
+**DONE (2026-06): two-gamma plume mixing.** `two_gamma` config / GUI
+checkbox transports an exhaust mass fraction Z (1 = exhaust, 0 = ambient
+air) as a conserved scalar riding the density mass flux, with turbulent
+diffusion (Sc_t = 0.7) across the shear layer. Implemented as a fully
+decoupled `scalar_transport` kernel (double-buffered, launched only when
+on), so it changes nothing in the validated 6-equation solver — thrust is
+bit-for-bit unchanged. Adds "Mixture fraction" and "Local gamma" fields
+(γ blends exhaust→air by mass fraction). Verified: Z bounded [0,1],
+exhaust-dominated core, air ambient, mixing layer between, local γ spans
+1.20→1.40. Known limitation: the scalar uses 1st-order upwind advection,
+so the core reads ~0.85–0.91 (numerically diffused) rather than 1.0;
+a MUSCL/WENO reconstruction of Z would sharpen it. Currently a passive
+field (γ shown but not fed back into the momentum/energy); dynamic
+two-gamma feedback is the natural next extension.
 
 ### 7. Time accuracy for unsteady phenomena — niche
 

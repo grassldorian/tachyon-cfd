@@ -88,6 +88,15 @@ class SimConfig:
     inlet_mut_ratio: float = 50.0            # mu_t / mu_lam at inlet [-]
     inlet_ramp_steps: int = 1500             # soft-start: ramp p0 over N steps
 
+    # --- Two-gamma plume mixing (exhaust mixing into ambient air) ---
+    two_gamma: bool = False                  # transport an exhaust mass
+                                             #   fraction and blend gas
+                                             #   properties between the exhaust
+                                             #   and the ambient gas across the
+                                             #   plume mixing layer (CP model)
+    ambient_gamma: float = 1.4               # ambient (farfield) gas gamma
+    ambient_R: float = 287.0                 # ambient (farfield) gas constant
+
     # --- Farfield / pressure outlet (domain edges) ---
     farfield_p: float = 101325.0             # static pressure [Pa]
     farfield_T: float = 288.15               # static temperature [K]

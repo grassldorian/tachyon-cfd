@@ -130,6 +130,31 @@ pe ≈ 38 kPa and (marginally, like the real engine nearly did) separates
 in-model. Use η-corrected equilibrium runs at/above the engine's design
 altitude; at sea level prefer η=1 equilibrium or the CP preset.
 
+## Two-gamma plume mixing (2026-06)
+
+`two_gamma` transports an exhaust mass fraction Z (1 = exhaust, 0 = ambient
+air) and reports a "Mixture fraction" field plus a "Local gamma" field that
+blends the exhaust and ambient γ by mass fraction. It is a passive scalar
+(decoupled `scalar_transport` kernel) — it cannot affect the validated
+flow solver.
+
+Test (`tests/test_two_gamma.py`, axisymmetric nozzle, low-γ exhaust 1.20
+into air 1.40, 9000 steps):
+
+| Check | Result |
+|---|---|
+| Mixture fraction bounded | [0.000, 1.000] |
+| Supersonic core (exhaust) | Z ≈ 0.91 |
+| Ambient corner (air) | Z ≈ 0.00 |
+| Mixing-layer cells (0.2<Z<0.8) | ~3–6 % |
+| Local γ range | 1.20 → 1.40 (exhaust → air) |
+| Thrust off vs on | +0.00 % (passive, identical) |
+
+The core reads ~0.85–0.91 rather than 1.0 because the scalar uses 1st-order
+upwind advection (numerically diffusive); it still cleanly shows the
+exhaust core, air ambient, and the mixing layer. With two-gamma off the
+solver is numerically bit-identical (isentropic regression unchanged).
+
 ## Downstream mesh stretching (2026-06)
 
 `plume_stretch` (Geometry; 1.0 = off) grows the x-cell width geometrically

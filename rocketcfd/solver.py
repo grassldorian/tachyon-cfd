@@ -44,6 +44,13 @@ class GPUSolver:
         self.dtl = cp.full((self.sy, self.sx), 1e30, dtype=f4)
         self.res = cp.zeros((self.sy, self.sx), dtype=f4)
         self.qw = cp.zeros((self.sy, self.sx), dtype=f4)   # wall heat flux
+        # two-gamma plume mixing: conserved exhaust mass fraction rho*Z
+        self.two_gamma = bool(getattr(cfg, "two_gamma", False))
+        if self.two_gamma:
+            self.UZ = cp.zeros((self.sy, self.sx), dtype=f4)   # rho*Z (Z=0 air)
+            self.UZ0 = cp.zeros_like(self.UZ)
+            self.UZb = cp.zeros_like(self.UZ)
+            self.Zf = cp.zeros((self.sy, self.sx), dtype=f4)    # cell Z (display)
 
         self.ct = cp.asarray(mask.cell_type)
         self.wd = cp.asarray(mask.wall_dist)
@@ -136,6 +143,16 @@ class GPUSolver:
                  self.axf, self.ayf, self.lam, self.wd, self.res, self.qw,
                  np.float32(ca), np.float32(cb), np.float32(cc))
 
+    def _scalar(self, ca: float, cb: float, cc: float):
+        """Advance the two-gamma exhaust-fraction scalar one RK stage, riding
+        the mass fluxes just computed by _rhs. Double-buffered (UZ -> UZb)."""
+        k = self.kern
+        k.launch(k.scalar_transport, self.U, self.UZ0, self.UZ, self.UZb,
+                 self.FX, self.FY, self.P, self.axf, self.ayf, self.lam,
+                 self.dtl, self.ct, self.Zf,
+                 np.float32(ca), np.float32(cb), np.float32(cc))
+        self.UZ, self.UZb = self.UZb, self.UZ
+
     def reconfigure(self, cfg: SimConfig):
         """Rebuild the kernels for a new config while keeping the current flow
         state. Used for warm-started parameter sweeps (e.g. an altitude sweep
@@ -157,10 +174,16 @@ class GPUSolver:
         self._dt_global = 0.0
         for _ in range(n):
             cp.copyto(self.U0, self.U)
+            if self.two_gamma:
+                cp.copyto(self.UZ0, self.UZ)
             self._rhs(compute_dt=True)
             self._combine(1.0, 0.0, 1.0)
+            if self.two_gamma:
+                self._scalar(1.0, 0.0, 1.0)
             self._rhs(compute_dt=False)
             self._combine(0.5, 0.5, 0.5)
+            if self.two_gamma:
+                self._scalar(0.5, 0.5, 0.5)
             self.step_count += 1
             if not self.cfg.local_dt:
                 self.sim_time += self._dt_global
@@ -211,6 +234,17 @@ class GPUSolver:
         }
         if getattr(cfg, "wall_T", 0.0) > 0.0 and cfg.wall_type == "noslip":
             fields["Wall heat flux [W/m^2]"] = cp.asnumpy(self.qw[2:-2, 2:-2])
+        if self.two_gamma:
+            Z = cp.asnumpy(self.Zf[2:-2, 2:-2]).astype(np.float32)
+            fields["Mixture fraction [-]"] = Z
+            # local gamma of the exhaust/air mixture (mass-weighted cp, cv)
+            ge, Re = cfg.gamma, cfg.R_gas
+            ga, Ra = cfg.ambient_gamma, cfg.ambient_R
+            cpe, cve = ge * Re / (ge - 1.0), Re / (ge - 1.0)
+            cpa, cva = ga * Ra / (ga - 1.0), Ra / (ga - 1.0)
+            cpm = Z * cpe + (1.0 - Z) * cpa
+            cvm = Z * cve + (1.0 - Z) * cva
+            fields["Local gamma [-]"] = (cpm / cvm).astype(np.float32)
         for key in fields:
             arr = fields[key].astype(np.float32).copy()
             arr[~fluid] = np.nan
