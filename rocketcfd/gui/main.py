@@ -311,6 +311,10 @@ class MainWindow(QMainWindow):
         self.png_path: str | None = None
         self.last_snap: dict | None = None
         self.overlay_rgba: np.ndarray | None = None
+        # plume-stretch display remap: nearest computational column per
+        # physical-uniform display column (None when the grid is uniform)
+        self._disp_idx: np.ndarray | None = None
+        self._disp_w = 0
         self.dx = 0.001
 
         # ---------- left: controls ----------
@@ -406,9 +410,8 @@ class MainWindow(QMainWindow):
             "(1.0 = uniform/off; try 1.02–1.05). Extends the plume domain and\n"
             "keeps the near-exit grid fine so shock diamonds survive further.\n"
             "Walls stay on the uniform grid, so thrust/Isp are unchanged.\n"
-            "Note: the field view shows the computational grid — downstream\n"
-            "cells are physically larger than drawn; exported NPZ carries the\n"
-            "true x_centers.")
+            "The field view is shown across the true physical length, so the\n"
+            "plume appears longer; the far field is coarser (bigger cells).")
         self.cfg_panel.edits["eta_cstar"].setToolTip(
             "Combustion (c*) efficiency. Incomplete combustion releases less\n"
             "energy, so the effective chamber temperature is η² · T₀.\n"
@@ -707,13 +710,39 @@ class MainWindow(QMainWindow):
         if self.img_nx == 0:
             return
         self.y_off = self._axis_offset_m()
-        self.world_rect = QRectF(0.0, -self.y_off, self.img_nx * self.dx,
-                                 self.img_ny * self.dx)
+        # displayed x-extent: stretched plume is shown across its TRUE physical
+        # length (the field is remapped column-wise), not the drawn frame width
+        wx = (self._disp_w if self._disp_idx is not None else self.img_nx) * self.dx
+        self.world_rect = QRectF(0.0, -self.y_off, wx, self.img_ny * self.dx)
         self.img_item.setRect(self.world_rect)
         self.overlay_item.setRect(self.world_rect)
-        self._update_scalebar(self.img_nx * self.dx)
+        self._update_scalebar(wx)
         self._update_axis_line()
         self._update_mesh_grid()
+
+    def _setup_stretch_display(self, snap):
+        """Build the nearest-column remap that shows a stretched plume across
+        its true physical length. Cheap; computed once per geometry."""
+        xc = snap.get("x_centers")
+        stretched = snap.get("meta", {}).get("stretched", False)
+        if not stretched or xc is None or self.dx <= 0:
+            if self._disp_idx is not None:
+                self._disp_idx = None
+                self._update_geometry()
+            return
+        xc = np.asarray(xc, dtype=np.float64)
+        n_disp = max(int(np.ceil(xc[-1] / self.dx)), len(xc))
+        if self._disp_idx is not None and self._disp_w == n_disp:
+            return                                   # already built
+        xu = (np.arange(n_disp) + 0.5) * self.dx     # display cell centers
+        idx = np.clip(np.searchsorted(xc, xu), 1, len(xc) - 1)
+        left = xu - xc[idx - 1]
+        right = xc[idx] - xu
+        idx = np.where(left < right, idx - 1, idx)   # nearest computational col
+        self._disp_idx = idx.astype(np.intp)
+        self._disp_w = n_disp
+        self.set_overlay(self.mask_ct) if self.mask_ct is not None else None
+        self._update_geometry()
 
     def _apply_scale(self):
         """Re-map the view coordinate system when meters-per-pixel changes."""
@@ -750,6 +779,7 @@ class MainWindow(QMainWindow):
             return
         self.dx = mask.dx
         self.img_nx, self.img_ny = mask.nx, mask.ny
+        self._disp_idx = None                 # rebuilt from the next snapshot
         self.mask_lam = mask.lam[2:-2, 2:-2].copy() if mask.smooth else None
         self.mask_ct = mask.cell_type[2:-2, 2:-2].copy()
         # show the raw drawing until the solver is initialized
@@ -809,6 +839,8 @@ class MainWindow(QMainWindow):
         rgba[ctype == INLET] = (30, 110, 255, 200)
         rgba[ctype == OUTLET] = (230, 60, 50, 200)
         self.overlay_rgba = rgba
+        if self._disp_idx is not None:          # remap to physical x extent
+            rgba = rgba[:, self._disp_idx]
         self.overlay_item.setImage(rgba)
         if self.world_rect is not None:
             self.overlay_item.setRect(self.world_rect)
@@ -869,6 +901,7 @@ class MainWindow(QMainWindow):
     @Slot(dict)
     def on_snapshot(self, snap: dict):
         self.last_snap = snap
+        self._setup_stretch_display(snap)
         meta = snap["meta"]
         self.lbl_step.setText(f"step {meta['step']:,}")
         self.lbl_res.setText(f"res {meta['residual']:.2e}")
@@ -1105,6 +1138,8 @@ class MainWindow(QMainWindow):
         cmap = get_cmap({"RdYlBu": "RdYlBu_r",
                          "Spectral": "Spectral_r"}.get(sel, sel))
         disp = np.nan_to_num(arr, nan=lo)
+        if self._disp_idx is not None:          # remap to physical x extent
+            disp = disp[:, self._disp_idx]
         self.img_item.setImage(disp, autoLevels=False, levels=(lo, hi))
         if rect is not None:
             self.img_item.setRect(rect)
@@ -1117,6 +1152,8 @@ class MainWindow(QMainWindow):
         p = self.vb.mapSceneToView(pos)
         xm, ym = p.x(), p.y()
         i, j = int(xm / self.dx), int((ym + self.y_off) / self.dx)
+        if self._disp_idx is not None and 0 <= i < self._disp_w:
+            i = int(self._disp_idx[i])      # display col -> computational col
         f = self.last_snap["fields"]
         m = f["Mach"]
         if 0 <= j < m.shape[0] and 0 <= i < m.shape[1]:

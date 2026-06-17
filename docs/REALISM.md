@@ -151,11 +151,12 @@ out of scope unless requested.
   enabling stretch on the test nozzle moved thrust 0.31 % and mass flow
   0.16 % (engine on the uniform grid → unchanged, as designed) while the
   plume domain grew 1.32× at ratio 1.03. y is never stretched.
-  Remaining GUI polish (deferred): the field view shows the computational
-  grid (downstream cells physically larger than drawn); exact downstream
-  positions are in the exported NPZ `x_centers` and the schlieren field is
-  computed against true cell centers. A future pass can resample the field
-  view / probe to physical coordinates under stretching.
+  The field view is remapped (nearest-column) to the TRUE physical length,
+  so the stretched plume renders longer (near-field exact, far-field shown
+  blocky); hover maps back to the computational column. Exported NPZ also
+  carries `x_centers`. Remaining minor polish: the cut-cell mesh overlay and
+  replay frames still draw on the uniform rect (only the live field view and
+  geometry overlay are remapped).
 - **Axisymmetric source terms**: verify the geometric source terms at the
   axis are well-behaved as r → 0 with cut cells (diagnostics exist in
   `tests/diag_axi.py`).
