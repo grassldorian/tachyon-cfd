@@ -12,8 +12,7 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QRectF, Qt, QThread, Signal, Slot
-from PySide6.QtGui import (QAction, QColor, QImage, QPalette, QPixmap,
-                           QTransform)
+from PySide6.QtGui import QAction, QColor, QImage, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
@@ -585,7 +584,10 @@ class MainWindow(QMainWindow):
         self.mesh_iso = pg.IsocurveItem(level=0.5,
                                         pen=pg.mkPen("#D97757", width=2))
         self.mesh_iso.setParentItem(self.overlay_item)
-        self.mesh_iso.setTransform(QTransform().translate(0.5, 0.5))
+        # pyqtgraph's isocurve already returns coordinates on the ImageItem's
+        # cell grid, so NO extra offset is needed — a +0.5 translate shoves the
+        # contour half a cell off the true wall (lam=0.5), which shows up as a
+        # one-cell top/bottom asymmetry on an axisymmetric engine.
         self.mesh_iso.setZValue(30)
         self.mesh_iso.hide()
         self.mesh_grid = pg.PlotCurveItem(
