@@ -118,6 +118,13 @@ class SolverWorker(QThread):
             self.solver.save_npz(path)
 
 
+# performance panel shows a rolling median over this many developed-flow
+# snapshots, so the quoted thrust / mdot / Isp / fuel-ox split are the steady
+# engine values instead of the instantaneous (slightly unsteady) reading.
+PERF_SMOOTH_N = 32
+G0 = 9.80665
+
+
 # ================================================================ config form
 FLOAT_FIELDS = [
     # (attr, label, group)
@@ -582,6 +589,7 @@ class MainWindow(QMainWindow):
         self.replay_frames: list[tuple] = []
         self._replay_stride = 1
         self._replay_count = 0
+        self._perf_buf: list[tuple] = []      # rolling (F, mdot) for smoothing
         self.y_off = 0.0
 
         self.glw = pg.GraphicsLayoutWidget()
@@ -934,6 +942,7 @@ class MainWindow(QMainWindow):
                 return
         self._apply_scale()
         self.replay_frames.clear()
+        self._perf_buf.clear()
         self._replay_stride = 1
         self._replay_count = 0
         self.replay_bar.setVisible(False)
@@ -1001,25 +1010,46 @@ class MainWindow(QMainWindow):
         self.lbl_perf.setText(f"{meta['steps_per_sec']:.1f} steps/s")
         perf = meta.get("performance")
         if perf:
-            self.lbl_thrust.setText(f"{perf['F']:.4g} {perf['force_unit']}")
+            # Quote a rolling median of thrust and mass flow over recent
+            # developed-flow snapshots: Isp, c_eff and the fuel/oxidizer split
+            # are all derived from these, so they are only as steady as mdot.
+            # Time-averaging the converged solution removes the residual
+            # unsteadiness (separation/acoustics) and gives an accurate steady
+            # quote. Isp/c_eff/split are recomputed from the smoothed F and
+            # mdot so the panel stays self-consistent.
+            if perf["Isp"] > 0.0:               # developed flow only
+                self._perf_buf.append((perf["F"], perf["mdot"]))
+                del self._perf_buf[:-PERF_SMOOTH_N]
+            if self._perf_buf:
+                a = np.array(self._perf_buf, dtype=np.float64)
+                F_s = float(np.median(a[:, 0])); md_s = float(np.median(a[:, 1]))
+            else:
+                F_s, md_s = perf["F"], perf["mdot"]
+            isp_s = F_s / (md_s * G0) if md_s > 1e-9 else 0.0
+            ceff_s = F_s / md_s if md_s > 1e-9 else 0.0
+            n = len(self._perf_buf)
+            self.lbl_thrust.setText(f"{F_s:.4g} {perf['force_unit']}")
             self.lbl_thrust.setToolTip(
                 f"Fx = {perf['Fx']:.4g} {perf['force_unit']}\n"
-                f"Fy = {perf['Fy']:.4g} {perf['force_unit']}")
-            self.lbl_mdot.setText(f"{perf['mdot']:.4g} {perf['mdot_unit']}")
-            self.lbl_isp.setText(f"{perf['Isp']:.1f} s")
-            self.lbl_ceff.setText(f"{perf['c_eff']:.0f} m/s")
+                f"Fy = {perf['Fy']:.4g} {perf['force_unit']}\n"
+                f"instantaneous F = {perf['F']:.4g} {perf['force_unit']}\n"
+                f"(panel shows a {n}-sample rolling median once flow develops)")
+            self.lbl_mdot.setText(f"{md_s:.4g} {perf['mdot_unit']}")
+            self.lbl_isp.setText(f"{isp_s:.1f} s")
+            self.lbl_ceff.setText(f"{ceff_s:.0f} m/s")
             self.res_plot.setLabel("left", "F", units=perf["force_unit"])
             mix = PROPELLANT_MIX.get(self.cfg_panel.prop_combo.currentText())
-            if mix and perf["mdot"] > 1e-12:
+            if mix and md_s > 1e-9 and isp_s > 0.0:
                 fuel, ox, of = mix
-                mf = perf["mdot"] / (1.0 + of)
+                mf = md_s / (1.0 + of)
                 self.lbl_split.setText(
-                    f"{fuel} {mf:.3g} + {ox} {perf['mdot'] - mf:.3g} "
+                    f"{fuel} {mf:.3g} + {ox} {md_s - mf:.3g} "
                     f"{perf['mdot_unit']}")
                 self.lbl_split.setToolTip(
-                    f"O/F mass ratio {of:g}\n"
+                    f"O/F mass ratio {of:g} (fuel = mdot/(1+O/F))\n"
                     f"{fuel}: {mf:.4g} {perf['mdot_unit']}\n"
-                    f"{ox}: {perf['mdot'] - mf:.4g} {perf['mdot_unit']}")
+                    f"{ox}: {md_s - mf:.4g} {perf['mdot_unit']}\n"
+                    f"from the {n}-sample median mdot {md_s:.4g}")
             else:
                 self.lbl_split.setText("–")
         hist = snap.get("thrust_history")
