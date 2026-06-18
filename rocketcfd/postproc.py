@@ -92,41 +92,70 @@ def performance(p: np.ndarray, rho: np.ndarray, u: np.ndarray, v: np.ndarray,
         m = fl[1:, :] & wa[:-1, :]              # wall above, n = -y
         Fy -= float(np.sum((pg[1:, :] * AY[:-1])[m]))
 
-    # ---- inlet faces: pressure + injected momentum; also mass flow ----
+    # ---- inlet faces: pressure + injected momentum (thrust only) ----
     m = inl[:, :-1] & fl[:, 1:]                 # inlet west of fluid, flow +x
     pf, rf = pg[:, 1:][m], rho[:, 1:][m]
     un = u[:, 1:][m]
     A = np.broadcast_to(AX, (ny, nx - 1))[m]
     Fx -= float(np.sum((pf + rf * un * un) * A))
-    mdot += float(np.sum(rf * np.maximum(un, 0.0) * A))
 
     m = inl[:, 1:] & fl[:, :-1]                 # inlet east of fluid, flow -x
     pf, rf = pg[:, :-1][m], rho[:, :-1][m]
     un = -u[:, :-1][m]
     A = np.broadcast_to(AX, (ny, nx - 1))[m]
     Fx += float(np.sum((pf + rf * un * un) * A))
-    mdot += float(np.sum(rf * np.maximum(un, 0.0) * A))
 
     m = inl[:-1, :] & fl[1:, :]                 # inlet above fluid, flow +y
     pf, rf = pg[1:, :][m], rho[1:, :][m]
     un = v[1:, :][m]
     A = np.broadcast_to(AY[:-1], (ny - 1, nx))[m]
     Fy -= float(np.sum((pf + rf * un * un) * A))
-    mdot += float(np.sum(rf * np.maximum(un, 0.0) * A))
 
     m = inl[1:, :] & fl[:-1, :]                 # inlet below fluid, flow -y
     pf, rf = pg[:-1, :][m], rho[:-1, :][m]
     un = -v[:-1, :][m]
     A = np.broadcast_to(AY[:-1], (ny - 1, nx))[m]
     Fy += float(np.sum((pf + rf * un * un) * A))
-    mdot += float(np.sum(rf * np.maximum(un, 0.0) * A))
+
+    # ---- mass flow: median engine-interior axial flux across x-stations ----
+    # Integrating rho*u over the injector face alone collapses to zero whenever
+    # the chamber's small injector-face velocity momentarily reverses (acoustic
+    # / fill transients) -> random Isp/mdot/c_eff dropouts. Instead integrate
+    # rho*u only over the fluid contiguous with the axis (out to the first
+    # wall), which excludes the surrounding ambient air, and take the median
+    # over the walled columns. By conservation this engine-interior flux equals
+    # mdot at every station from chamber to exit, so the median is robust to the
+    # injector dropouts, pinched slivers and bell separation that corrupt any
+    # single plane, while the ambient/plume entrainment is left out entirely.
+    k = int(np.floor(axis_row))                 # last interior row index <= axis
+    interior = np.zeros((ny, nx), dtype=bool)
+    if k >= 0:                                  # side toward row 0
+        seg = fl[:k + 1][::-1]
+        interior[:k + 1] = np.cumprod(seg, axis=0, dtype=np.uint8).astype(bool)[::-1]
+    if k + 1 < ny:                              # side toward row ny-1
+        seg = fl[k + 1:]
+        interior[k + 1:] = np.cumprod(seg, axis=0, dtype=np.uint8).astype(bool)
+    flux_col = np.sum(rho * u * interior * ax[:, None], axis=0)
+    walled = wa.any(axis=0) & interior.any(axis=0)
+    if walled.any():
+        mdot = abs(float(np.median(flux_col[walled])))
+    else:                                       # free jet / no walls: inlet plane
+        mdot = float(np.sum(rho * np.maximum(u, 0.0) * fl * ax[:, None]))
 
     if axisymmetric and axis_center:
         Fx *= 0.5; Fy *= 0.5; mdot *= 0.5       # drawing contains both halves
 
     F = float(np.hypot(Fx, Fy))
-    isp = F / (mdot * G0) if mdot > 1e-12 else 0.0
-    ceff = F / mdot if mdot > 1e-12 else 0.0
+    # Isp / c_eff need an established (choked) mass flow. During fill/acoustic
+    # transients mdot can be a hair above zero and divide F into a nonphysical
+    # value, so gate on a generous chemical-rocket ceiling: c_eff is intensive
+    # (size-independent) and never exceeds ~5 km/s for chemical propellants, so
+    # > 15 km/s means the flow has not developed yet -> report 0.
+    if mdot > 1e-9 and F / mdot < 1.5e4:
+        ceff = F / mdot
+        isp = ceff / G0
+    else:
+        ceff = isp = 0.0
     return {
         "Fx": Fx, "Fy": Fy, "F": F, "mdot": mdot, "Isp": isp, "c_eff": ceff,
         "force_unit": "N" if axisymmetric else "N/m",
