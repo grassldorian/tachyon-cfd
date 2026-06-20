@@ -754,8 +754,27 @@ class MainWindow(QMainWindow):
         if dlg.exec() and dlg.selected:
             self.load_image_path(dlg.selected)
 
-    def _design_to_sim(self, path: str):
-        """Designer tab callback: load a drawn engine into the simulation."""
+    def _design_to_sim(self, path: str, meta: dict | None = None):
+        """Designer tab callback: load a designed engine into the simulation.
+
+        ``meta`` carries the physical scale, axisymmetry and gas/chamber state
+        from the designer so the loaded mask is sized and set up correctly.
+        """
+        if meta:
+            cp = self.cfg_panel
+            for key in ("meters_per_pixel", "gamma", "R_gas",
+                        "inlet_T0", "inlet_p0"):
+                if key in meta and key in cp.edits:
+                    cp.edits[key].setText(f"{meta[key]:g}")
+            if meta.get("axisymmetric"):
+                cp.axi_chk.setChecked(True)
+                cp.axis_combo.setCurrentIndex(
+                    {"center": 0, "top": 1, "bottom": 2}.get(
+                        meta.get("axis_location", "center"), 0))
+            # the designer hands over explicit gas properties -> custom CP gas
+            cp.gasmodel_combo.setCurrentIndex(0)
+            idx = cp.prop_combo.findText("Custom")
+            cp.prop_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.load_image_path(path)
         self.tabs.setCurrentIndex(0)
         self.statusBar().showMessage(

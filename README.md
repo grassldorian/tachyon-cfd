@@ -6,9 +6,11 @@
 </p>
 <p align="center"><i>Rocketdyne F-1 at sea level — Mach field with the over-expanded shock diamonds in the plume.</i></p>
 
-Draw your engine as a PNG or SVG (or in the built-in vector designer), set the
-chamber conditions, press **Run**, and get thrust, Isp, full flow fields, wall
-heat flux and a PDF report — all computed on the GPU in seconds-to-minutes.
+Draw your engine as a PNG or SVG — or size it parametrically in the built-in
+**engine designer** (chamber/throat/nozzle dimensions, ideal-rocket sizing,
+one-click "convert to mesh + add a pressure inlet") — set the chamber
+conditions, press **Run**, and get thrust, Isp, full flow fields, wall heat
+flux and a PDF report, all computed on the GPU in seconds-to-minutes.
 
 Validated against the Rocketdyne F-1: **thrust within ~0.2 %**, and Isp
 bracketed within ±3.5 % by the included gas models
@@ -44,7 +46,8 @@ bracketed within ±3.5 % by the included gas models
 - **Analysis tools** — two-click line probe (centerline / wall-pressure
   presets), altitude sweep (thrust & Isp vs altitude, aerospike comparisons),
   convergence gate, multi-page PDF report, MP4 export, 3D exhaust view, and a
-  vector **engine designer** tab.
+  parametric **engine designer** that sizes a nozzle (ideal-rocket model) and
+  converts it straight into a meshable PNG with a pressure inlet.
 - **Five GUI themes** — Mono (B&W, default), Light, Dark, Blueprint, and
   Midnight.
 

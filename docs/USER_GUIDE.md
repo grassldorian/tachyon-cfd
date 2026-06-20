@@ -259,3 +259,30 @@ When to stop and how often to refresh.
 7. **⟲ Initialize**, then **▶︎ Run**. Watch the residual fall and the thrust
    history flatten; read thrust/Isp from the performance box and export a
    **Report PDF**.
+
+---
+
+## Engine designer tab
+
+Don't have a drawing? The **Engine designer** tab sizes a nozzle
+parametrically, converts it into a meshable PNG, and adds the pressure inlet —
+then hands it to the solver.
+
+- **Dimensions [mm]** — chamber length & Ø, throat Ø, nozzle length, exit Ø,
+  and the **Nozzle** type (Conical 15° or Rao 80% bell). The cross-section
+  preview and the ideal-rocket performance estimate update live.
+- **Operating point** — propellant, chamber pressure, altitude, and a target
+  thrust. **★ Optimize dimensions** sizes the whole engine for perfect
+  expansion at that altitude and the requested thrust (throat → thrust, exit →
+  pₑ = pₐ, chamber → contraction ratio + L\*).
+- **Mesh & pressure inlet** — *Engine length [px]* sets the grid resolution,
+  *Plume length ×* the downstream domain, and the **pressure inlet** is placed
+  on the injector face at the chosen *Inlet Ø [% chamber]*.
+- **Send to solver →** rasterizes the geometry to a Tachyon mask (black walls,
+  white flow, blue inlet, red outlet), carries the scale + gas + chamber
+  pressure into the Simulation panel, and switches to it. Then just press
+  **⟲ Initialize** and **▶︎ Run**.
+
+The performance shown in the designer is the *ideal 1-D* estimate; the CFD run
+gives the real number (and accounts for divergence, viscous and expansion
+losses).
