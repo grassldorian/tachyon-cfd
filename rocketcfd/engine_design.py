@@ -238,6 +238,7 @@ def _polygon_sdf(X: np.ndarray, Y: np.ndarray, poly: np.ndarray) -> np.ndarray:
 
 def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    engine_px: int = 620, plume_factor: float = 1.6,
+                   margin_factor: float = 0.30,
                    wall_mm: float | None = None, add_inlet: bool = True,
                    inlet_frac: float = 0.75, analytic: bool = False):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
@@ -263,7 +264,9 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     face_mm = 2.0 * wall_mm                        # injector face plate thickness
     x_off = face_mm + max(0.06 * L, 4.0)           # left farfield + face room
     plume = plume_factor * L
-    margin_r = max(0.30 * rmax, 6.0)
+    # radial white space above/below the engine, as a multiple of the biggest
+    # engine radius — enlarge for high-altitude plumes that balloon radially
+    margin_r = max(max(margin_factor, 0.05) * rmax, 6.0)
     W = int(round((x_off + L + plume) * px_per_mm))
     H = int(round(2.0 * (rmax + wall_mm + margin_r) * px_per_mm))
     H += H % 2                                      # even -> symmetric axis

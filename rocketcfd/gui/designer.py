@@ -135,6 +135,13 @@ class DesignerTab(QWidget):
         self.plume_edit.setToolTip("Downstream plume length as a multiple of the "
                                    "engine length (white space + red outlet edge).")
         mf.addRow("Plume length ×", self.plume_edit)
+        self.margin_edit = StepLineEdit("0.3", step=0.1, minimum=0.05)
+        self.margin_edit.textChanged.connect(self._schedule)
+        self.margin_edit.setToolTip(
+            "Radial white space above/below the engine, as a multiple of the\n"
+            "biggest engine radius. Increase (e.g. 1–3) to give high-altitude\n"
+            "plumes room to balloon radially; more cells = slower.")
+        mf.addRow("Radial margin ×", self.margin_edit)
         self.inlet_chk = QCheckBox("Pressure inlet at injector face")
         self.inlet_chk.setChecked(True)
         self.inlet_chk.toggled.connect(self._schedule)
@@ -194,6 +201,7 @@ class DesignerTab(QWidget):
             geom = self._read_geom()
             res = max(120, int(float(self.res_edit.text())))
             plume = max(0.2, float(self.plume_edit.text()))
+            margin = max(0.05, float(self.margin_edit.text()))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             pc = float(self.pc_edit.text()) * 1e5
             pa = ed.ambient_pressure(float(self.alt_edit.text()))
@@ -214,6 +222,7 @@ class DesignerTab(QWidget):
 
         rgb, info = ed.rasterize_mask(
             geom, nozzle, engine_px=res, plume_factor=plume,
+            margin_factor=margin,
             add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac)
         self._rgb, self._info = rgb, info
 
@@ -278,9 +287,11 @@ class DesignerTab(QWidget):
             geom = self._read_geom()
             res = max(120, int(float(self.res_edit.text())))
             plume = max(0.2, float(self.plume_edit.text()))
+            margin = max(0.05, float(self.margin_edit.text()))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             rgb, info = ed.rasterize_mask(
                 geom, self._nozzle(), engine_px=res, plume_factor=plume,
+                margin_factor=margin,
                 add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
                 analytic=True)
             self._rgb, self._info = rgb, info

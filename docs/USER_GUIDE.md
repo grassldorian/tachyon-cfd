@@ -284,8 +284,10 @@ then hands it to the solver.
   expansion at that altitude and the requested thrust (throat → thrust, exit →
   pₑ = pₐ, chamber → contraction ratio + L\*).
 - **Mesh & pressure inlet** — *Engine length [px]* sets the grid resolution,
-  *Plume length ×* the downstream domain, and the **pressure inlet** is placed
-  on the injector face at the chosen *Inlet Ø [% chamber]*.
+  *Plume length ×* the downstream domain, *Radial margin ×* the white space
+  above/below the engine (as a multiple of its biggest radius — raise it to
+  1–3 for high-altitude plumes that balloon radially), and the **pressure
+  inlet** is placed on the injector face at the chosen *Inlet Ø [% chamber]*.
 - **Send to solver →** rasterizes the geometry to a Tachyon mask (black walls,
   white flow, blue inlet, red outlet) **plus an exact analytic level set**: the
   cut-cell wall surface is built from the true signed distance to the Rao/cone
