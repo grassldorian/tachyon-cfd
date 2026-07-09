@@ -122,9 +122,19 @@ item (integral thrust/Isp are much less affected).
   spreading at high turbulent Mach number; verified in docs/VALIDATION.md.
 - **DONE (2026-06):** Ducros-gated **carbuncle cure** for the Mach disk
   (`carbuncle_fix`, default on) — blends HLLC→HLL only at strong shocks.
-- A realizability / production limiter at shocks (Menter's 10·β*ρωk clip is
-  present in most SST variants — verify it's in the kernel) prevents
-  spurious turbulence generation in the shock train of over-expanded flow.
+- Menter's 10·β*ρωk production limiter **is present in the kernel** (verified
+  2026-06: `rk_combine` clips S² against 10·β*·ρ·k·ω/μt).
+- **DONE (2026-06): configurable eddy-viscosity cap** (`mut_max_ratio`,
+  default 1e5 = the classic clamp, bit-identical). Measured on a 20-bar
+  LOX/Ethanol bell: SST builds μt/μ ≈ 50 000 (p99) in the plume shear layer,
+  which (a) over-mixes the jet — the supersonic core reached 485 mm at 12k
+  steps vs **1028 mm laminar** — and (b) dominates the viscous local-dt limit
+  in ~55 % of plume cells, so the plume front develops very slowly. Capping
+  μt at ~500–2000× laminar restores long shock-diamond plumes and fast
+  development while keeping boundary-layer turbulence intact; engine
+  thrust/Isp (nozzle interior) are essentially unaffected. RANS jet
+  over-spreading is a documented SST weakness; the honest fix (SARC /
+  jet-calibrated corrections) remains future work.
 
 ### 6. Multi-species plume mixing — lower impact for thrust, high cost
 

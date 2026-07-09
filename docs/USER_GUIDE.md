@@ -150,6 +150,14 @@ speed for sharpness or to stabilize a hard case.
 - **Wall emissivity [-], 0=off** — gray-gas **radiative** load added on top of
   convection: `q_rad = ε·σ·(T_gas⁴ − T_wall⁴)`. `0` = off. Needs a no-slip wall
   and a non-zero wall temperature. Typical 0.2–0.4 for sooty/hot walls.
+- **Max eddy visc. μt/μ [-]** — cap on the SST turbulent viscosity. `1e5` =
+  classic sanity clamp (default, used for all validation). RANS turbulence
+  over-mixes supersonic jets: in the plume shear layer μt can reach tens of
+  thousands × laminar, which both **washes out the shock diamonds** and makes
+  the plume **develop very slowly** (μt throttles the local viscous time-step
+  limit). Set **~500–2000** for long, crisp, fast-developing plumes; engine
+  thrust/Isp are set by the nozzle interior and barely change. (For a fully
+  inviscid-looking jet, untick *Turbulence model* instead.)
 
 **Discretization**
 - **CFL number [-]** — time-step safety factor. `0.4` default. Lower (0.2–0.3)

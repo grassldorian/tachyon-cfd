@@ -145,6 +145,7 @@ FLOAT_FIELDS = [
     ("farfield_T", "Static temperature [K]", "Farfield / outlet (edges)"),
     ("wall_T", "Wall temperature [K], 0=adiab.", "Numerics"),
     ("wall_emissivity", "Wall emissivity [-], 0=off", "Numerics"),
+    ("mut_max_ratio", "Max eddy visc. μt/μ [-]", "Numerics"),
     ("cfl", "CFL number [-]", "Numerics"),
     ("residual_target", "Residual target [-]", "Run control"),
 ]
@@ -475,6 +476,14 @@ class MainWindow(QMainWindow):
             "Walls stay on the uniform grid, so thrust/Isp are unchanged.\n"
             "The field view is shown across the true physical length, so the\n"
             "plume appears longer; the far field is coarser (bigger cells).")
+        self.cfg_panel.edits["mut_max_ratio"].setToolTip(
+            "Cap on the SST eddy viscosity, as a multiple of the laminar\n"
+            "viscosity. 1e5 = classic sanity clamp (default, validated).\n"
+            "RANS turbulence over-mixes supersonic jets — capping to ~500–2000\n"
+            "keeps shock diamonds alive far downstream AND makes the plume\n"
+            "develop much faster (μt also throttles the viscous time-step\n"
+            "limit). Engine thrust/Isp are dominated by the nozzle interior\n"
+            "and are barely affected.")
         self.cfg_panel.edits["eta_cstar"].setToolTip(
             "Combustion (c*) efficiency. Incomplete combustion releases less\n"
             "energy, so the effective chamber temperature is η² · T₀.\n"

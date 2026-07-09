@@ -47,6 +47,7 @@ _CUDA_SRC = Template(r"""
 #define GM1IN     $GM1IN
 #define KINFAC    $KINFAC
 #define MUTRIN    $MUTRIN
+#define MUTMAX    $MUTMAX
 #define PFAR      $PFAR
 #define TFAR      $TFAR
 #define RGFAR     $RGFAR
@@ -818,7 +819,11 @@ __global__ void turb_visc(float* P, const float* G, const float* wd,
     float F2 = tanhf(arg2 * arg2);
     float Smag = sqrtf(S2);
     float mut = rho * A1SST * k / fmaxf(A1SST * w, Smag * F2);
-    mut = fminf(mut, 1.0e5f * mul);
+    // MUTMAX: user-configurable eddy-viscosity cap (default 1e5 = the classic
+    // sanity clamp). RANS SST over-mixes supersonic jets, which both shortens
+    // the plume and (via the viscous dt limit) makes it develop slowly —
+    // capping around 500-2000x restores long shock-diamond plumes.
+    mut = fminf(mut, MUTMAX * mul);
     float dkdw = GF(6,c)*GF(8,c) + GF(7,c)*GF(9,c);
     float CDkw = fmaxf(2.0f * rho * SIGW2 / w * dkdw, 1.0e-20f);
     float arg1 = fminf(fmaxf(t1, t2), 4.0f * rho * SIGW2 * k / (CDkw * d * d));
@@ -1412,6 +1417,7 @@ def build_source(cfg, nx: int, ny: int) -> str:
         MUREF=_f(cfg.mu_ref), TREFS=_f(cfg.T_ref_sutherland), SSUTH=_f(cfg.S_sutherland),
         P0IN=_f(cfg.inlet_p0), T0IN=_f(t0_eff), PCHOKE=_f(pchoke),
         KINFAC=_f(1.5 * cfg.inlet_turb_intensity ** 2), MUTRIN=_f(cfg.inlet_mut_ratio),
+        MUTMAX=_f(max(getattr(cfg, "mut_max_ratio", 1.0e5), 1.0)),
         PFAR=_f(cfg.farfield_p), TFAR=_f(cfg.farfield_T),
         UFAR=_f(cfg.farfield_u), VFAR=_f(cfg.farfield_v),
         KFAR=_f(1.0e-6), WFAR=_f(10.0),

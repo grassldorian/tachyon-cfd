@@ -130,6 +130,15 @@ class SimConfig:
                                              #   correction to k-omega SST for
                                              #   high-Mach shear layers (slows
                                              #   plume spreading; opt-in)
+    mut_max_ratio: float = 1.0e5             # eddy-viscosity cap mu_t/mu_lam.
+                                             #   1e5 = classic sanity clamp
+                                             #   (default, validated). RANS SST
+                                             #   over-mixes supersonic jets:
+                                             #   ~500-2000 keeps shock diamonds
+                                             #   alive far downstream and makes
+                                             #   the plume develop much faster
+                                             #   (mu_t also throttles the local
+                                             #   viscous time-step limit)
 
     flux_scheme: str = "hllc"                # "hllc" | "hll" | "roe" | "ausm"
     muscl_order: int = 2                     # 1 = first order, 2 = MUSCL
