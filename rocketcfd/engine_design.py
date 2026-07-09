@@ -225,7 +225,8 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
         wall_mm = max(0.05 * rmax, 2.0)            # cosmetic wall thickness
     px_per_mm = engine_px / max(L, 1e-6)
 
-    x_off = wall_mm + max(0.06 * L, 4.0)           # left farfield + injector room
+    face_mm = 2.0 * wall_mm                        # injector face plate thickness
+    x_off = face_mm + max(0.06 * L, 4.0)           # left farfield + face room
     plume = plume_factor * L
     margin_r = max(0.30 * rmax, 6.0)
     W = int(round((x_off + L + plume) * px_per_mm))
@@ -245,17 +246,22 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
         outer = [px(xx, sgn * (rr + wall_mm)) for xx, rr in zip(x, r)][::-1]
         d.polygon(inner + outer, fill=WALL)
 
-    # injector face: black bar closing the chamber's left end
-    bx0, _ = px(0.0, 0.0)
-    bx1, _ = px(wall_mm, 0.0)
-    d.rectangle([bx0, axis_y - (rc + wall_mm) * px_per_mm,
-                 bx1, axis_y + (rc + wall_mm) * px_per_mm], fill=WALL)
+    # injector face: solid plate that IS part of the engine — spans the full
+    # chamber diameter (+ walls) and sits at x in [-face_mm, 0] so the chamber
+    # volume is untouched and the plate merges with the wall bands at x = 0.
+    fx0, _ = px(-face_mm, 0.0)
+    fx1, _ = px(0.0, 0.0)
+    d.rectangle([fx0, axis_y - (rc + wall_mm) * px_per_mm,
+                 fx1, axis_y + (rc + wall_mm) * px_per_mm], fill=WALL)
 
-    # pressure inlet: blue opening centred on the injector face
+    # pressure inlet: blue opening set INTO the face plate, on the chamber
+    # side only — the outer half of the plate stays black, so the inlet feeds
+    # the chamber and is closed toward the outside (never open on both sides).
     if add_inlet:
         ir = max(inlet_frac, 0.05) * rc
-        d.rectangle([bx0, axis_y - ir * px_per_mm,
-                     bx1, axis_y + ir * px_per_mm], fill=INLET)
+        ix0, _ = px(-0.5 * face_mm, 0.0)
+        d.rectangle([ix0, axis_y - ir * px_per_mm,
+                     fx1, axis_y + ir * px_per_mm], fill=INLET)
 
     # pressure outlet: red strip down the downstream (right) edge
     rw = max(2, int(round(0.004 * W)))

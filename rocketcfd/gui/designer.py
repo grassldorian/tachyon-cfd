@@ -31,6 +31,38 @@ GEOM_FIELDS = [
 ]
 
 
+class StepLineEdit(QLineEdit):
+    """Numeric line edit: Up/Down arrow keys step the value (geometry fields
+    step 1 mm). Shift = 10x step, Ctrl = 0.1x step for fine trims."""
+
+    def __init__(self, text="", step=1.0, minimum=0.0, decimals=1):
+        super().__init__(text)
+        self._step = step
+        self._min = minimum
+        self._dec = decimals
+        self.setAlignment(Qt.AlignRight)
+
+    def keyPressEvent(self, ev):
+        if ev.key() in (Qt.Key_Up, Qt.Key_Down):
+            try:
+                v = float(self.text().replace(",", "."))
+            except ValueError:
+                ev.accept()
+                return
+            s = self._step
+            if ev.modifiers() & Qt.ShiftModifier:
+                s *= 10.0
+            elif ev.modifiers() & Qt.ControlModifier:
+                s *= 0.1
+            v += s if ev.key() == Qt.Key_Up else -s
+            v = max(self._min, v)
+            self.setText(f"{v:.{self._dec}f}".rstrip("0").rstrip(".")
+                         if self._dec else f"{v:g}")
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+
 class DesignerTab(QWidget):
     """Parametric engine -> mask PNG -> solver. send_cb(path, meta=dict)."""
 
@@ -60,8 +92,8 @@ class DesignerTab(QWidget):
         geo = QGroupBox("Dimensions [mm]")
         gf = QFormLayout(geo)
         for key, label, default in GEOM_FIELDS:
-            e = QLineEdit(f"{default:g}")
-            e.setAlignment(Qt.AlignRight)
+            e = StepLineEdit(f"{default:g}", step=1.0, minimum=1.0)  # ±1 mm
+            e.setToolTip("↑ / ↓ arrow keys: ±1 mm  (Shift ±10, Ctrl ±0.1)")
             e.textChanged.connect(self._schedule)
             self.edits[key] = e
             gf.addRow(label, e)
@@ -78,14 +110,13 @@ class DesignerTab(QWidget):
         self.prop_combo.setCurrentText("LOX / Ethanol")
         self.prop_combo.currentIndexChanged.connect(self._schedule)
         of.addRow("Propellant", self.prop_combo)
-        self.pc_edit = QLineEdit("20"); self.pc_edit.setAlignment(Qt.AlignRight)
+        self.pc_edit = StepLineEdit("20", step=1.0, minimum=0.1)     # ±1 bar
         self.pc_edit.textChanged.connect(self._schedule)
         of.addRow("Chamber p [bar]", self.pc_edit)
-        self.alt_edit = QLineEdit("0"); self.alt_edit.setAlignment(Qt.AlignRight)
+        self.alt_edit = StepLineEdit("0", step=1.0, minimum=0.0)     # ±1 km
         self.alt_edit.textChanged.connect(self._schedule)
         of.addRow("Altitude [km]", self.alt_edit)
-        self.thrust_edit = QLineEdit("10")
-        self.thrust_edit.setAlignment(Qt.AlignRight)
+        self.thrust_edit = StepLineEdit("10", step=1.0, minimum=0.1)  # ±1 kN
         of.addRow("Target thrust [kN]", self.thrust_edit)
         b_opt = QPushButton("★  Optimize dimensions")
         b_opt.clicked.connect(self.optimize)
@@ -94,13 +125,12 @@ class DesignerTab(QWidget):
 
         msk = QGroupBox("Mesh && pressure inlet")
         mf = QFormLayout(msk)
-        self.res_edit = QLineEdit("600"); self.res_edit.setAlignment(Qt.AlignRight)
+        self.res_edit = StepLineEdit("600", step=20.0, minimum=120.0, decimals=0)
         self.res_edit.textChanged.connect(self._schedule)
         self.res_edit.setToolTip("Engine length in pixels = mesh resolution. "
                                  "Higher = finer grid (more cells, slower).")
         mf.addRow("Engine length [px]", self.res_edit)
-        self.plume_edit = QLineEdit("1.6")
-        self.plume_edit.setAlignment(Qt.AlignRight)
+        self.plume_edit = StepLineEdit("1.6", step=0.1, minimum=0.2)
         self.plume_edit.textChanged.connect(self._schedule)
         self.plume_edit.setToolTip("Downstream plume length as a multiple of the "
                                    "engine length (white space + red outlet edge).")
@@ -109,8 +139,7 @@ class DesignerTab(QWidget):
         self.inlet_chk.setChecked(True)
         self.inlet_chk.toggled.connect(self._schedule)
         mf.addRow(self.inlet_chk)
-        self.inlet_edit = QLineEdit("75")
-        self.inlet_edit.setAlignment(Qt.AlignRight)
+        self.inlet_edit = StepLineEdit("75", step=1.0, minimum=5.0, decimals=0)
         self.inlet_edit.textChanged.connect(self._schedule)
         self.inlet_edit.setToolTip("Blue inlet diameter as a percent of the "
                                    "chamber diameter.")

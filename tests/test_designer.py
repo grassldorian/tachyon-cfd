@@ -28,6 +28,19 @@ for nozzle in ("Conical (15°)", "Bell (Rao 80%)"):
     assert info["meters_per_pixel"] > 0
     print(f"{nozzle:16s}: {info['nx']}x{info['ny']}  inlet_px={blue}  ok")
 
+# 1b. the inlet is set INTO the injector face: closed toward the outside
+#     (black backing on the left), open only into the chamber (white on right)
+rgb, info = ed.rasterize_mask(geom, "Conical (15°)", engine_px=400)
+blue = (rgb[:, :, 2] > 150) & (rgb[:, :, 0] < 80) & (rgb[:, :, 1] < 80)
+white = np.all(rgb > 200, axis=2)
+js, is_ = np.nonzero(blue)
+left_open = sum(1 for j, i in zip(js, is_) if i > 0 and white[j, i - 1])
+right_touch = sum(1 for j, i in zip(js, is_)
+                  if i + 1 < rgb.shape[1] and white[j, i + 1])
+assert left_open == 0, "inlet open to the outside (both sides)!"
+assert right_touch > 0, "inlet does not open into the chamber"
+print(f"injector face: inlet backed by wall, {right_touch} px into chamber")
+
 # 2. the mask loads into the solver pipeline with fluid + inlet cells
 import tempfile
 from PIL import Image
@@ -57,5 +70,19 @@ assert float(cp.edits["inlet_p0"].text()) == 20e5
 assert win.tabs.currentIndex() == 0                 # switched to Simulation
 assert win.img_nx > 0 and win.img_ny > 0
 print(f"send -> grid {win.img_nx}x{win.img_ny}, p0={cp.edits['inlet_p0'].text()}")
+
+# 4. arrow keys step the geometry fields by 1 mm (Shift 10, Ctrl 0.1)
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+e = d.edits["throat_d"]
+e.setText("30")
+QTest.keyClick(e, Qt.Key_Up)
+assert e.text() == "31", e.text()
+QTest.keyClick(e, Qt.Key_Down)
+QTest.keyClick(e, Qt.Key_Down)
+assert e.text() == "29", e.text()
+QTest.keyClick(e, Qt.Key_Up, Qt.ShiftModifier)
+assert e.text() == "39", e.text()
+print("arrow-key stepping OK")
 
 print("designer OK")
