@@ -48,6 +48,8 @@ _CUDA_SRC = Template(r"""
 #define KINFAC    $KINFAC
 #define MUTRIN    $MUTRIN
 #define MUTMAX    $MUTMAX
+#define OUTRELAX  $OUTRELAX
+#define OUTRELAXONE $OUTRELAXONE
 #define PFAR      $PFAR
 #define TFAR      $TFAR
 #define RGFAR     $RGFAR
@@ -331,8 +333,17 @@ __device__ St fetch(const float* P, const unsigned char* ct, const float* wd,
         float sxd = (float)(io - ic), syd = (float)(jo - jc);  // into-domain
         float into = uo * sxd + vo * syd;
         if (into > 0.0f) {
-            // backflow: ambient gas enters here -> anchor thermodynamics
-            q.p = PFAR; q.rho = PFAR / (RGFAR * TFAR); q.T = TFAR;
+            // backflow: ambient gas enters here -> anchor the thermodynamics
+            // (T stays pinned to ambient or the plume heats unboundedly).
+            // The pressure is relaxed like the outflow branch: OUTRELAX=1 is
+            // the classic hard pin; lower values let the pressure waves of
+            // vortices crossing the outlet leave instead of reflecting.
+#if OUTRELAXONE
+            q.p = PFAR;                       // hard pin (bit-exact default)
+#else
+            q.p = po + OUTRELAX * (PFAR - po);
+#endif
+            q.T = TFAR; q.rho = q.p / (RGFAR * TFAR);
             q.u = uo; q.v = vo;
             q.k = KFAR; q.w = WFAR;
             q.mul = suth(TFAR); q.mut = 0.0f; q.F1 = 1.0f;
@@ -350,9 +361,17 @@ __device__ St fetch(const float* P, const unsigned char* ct, const float* wd,
 #endif
         if (uo*uo + vo*vo >= go * po / ro) {    // supersonic: extrapolate
             q.rho = ro; q.p = po;
-        } else {                                 // subsonic: impose farfield p
-            q.p = PFAR;
-            q.rho = ro * powf(PFAR / po, 1.0f / go);
+        } else {
+            // subsonic: relax the ghost pressure toward ambient. OUTRELAX=1
+            // is the classic hard pin (fully anchors back-pressure but
+            // reflects acoustic/vortical disturbances back upstream);
+            // 0.2-0.5 lets most waves leave while still holding the mean.
+#if OUTRELAXONE
+            q.p = PFAR;                       // hard pin (bit-exact default)
+#else
+            q.p = po + OUTRELAX * (PFAR - po);
+#endif
+            q.rho = ro * powf(q.p / po, 1.0f / go);
         }
 #if THERMO == 2
         q.T = eq_T_from_p(log10f(fmaxf(q.rho, RHOMIN)), q.rho, q.p);
@@ -1418,6 +1437,8 @@ def build_source(cfg, nx: int, ny: int) -> str:
         P0IN=_f(cfg.inlet_p0), T0IN=_f(t0_eff), PCHOKE=_f(pchoke),
         KINFAC=_f(1.5 * cfg.inlet_turb_intensity ** 2), MUTRIN=_f(cfg.inlet_mut_ratio),
         MUTMAX=_f(max(getattr(cfg, "mut_max_ratio", 1.0e5), 1.0)),
+        OUTRELAX=_f(min(max(getattr(cfg, "outlet_relax", 1.0), 0.01), 1.0)),
+        OUTRELAXONE=1 if getattr(cfg, "outlet_relax", 1.0) >= 0.9999 else 0,
         PFAR=_f(cfg.farfield_p), TFAR=_f(cfg.farfield_T),
         UFAR=_f(cfg.farfield_u), VFAR=_f(cfg.farfield_v),
         KFAR=_f(1.0e-6), WFAR=_f(10.0),

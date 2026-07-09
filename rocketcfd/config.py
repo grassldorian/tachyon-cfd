@@ -110,6 +110,14 @@ class SimConfig:
     farfield_T: float = 288.15               # static temperature [K]
     farfield_u: float = 0.0                  # x-velocity [m/s]
     farfield_v: float = 0.0                  # y-velocity [m/s]
+    outlet_relax: float = 1.0                # subsonic outlet pressure
+                                             #   relaxation [0..1]. 1 = hard
+                                             #   pin to ambient (classic,
+                                             #   validated default) but it
+                                             #   reflects waves back upstream;
+                                             #   0.2-0.5 lets acoustic/vortical
+                                             #   disturbances leave (use for
+                                             #   unsteady plume runs)
 
     # --- Numerics ---
     wall_emissivity: float = 0.0             # gray-gas radiative emissivity at

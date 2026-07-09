@@ -145,6 +145,7 @@ FLOAT_FIELDS = [
     ("inlet_turb_intensity", "Turbulence intensity [-]", "Chamber inlet (blue)"),
     ("farfield_p", "Static pressure [Pa]", "Farfield / outlet (edges)"),
     ("farfield_T", "Static temperature [K]", "Farfield / outlet (edges)"),
+    ("outlet_relax", "Outlet relax [0–1]", "Farfield / outlet (edges)"),
     ("wall_T", "Wall temperature [K], 0=adiab.", "Numerics"),
     ("wall_emissivity", "Wall emissivity [-], 0=off", "Numerics"),
     ("mut_max_ratio", "Max eddy visc. μt/μ [-]", "Numerics"),
@@ -479,6 +480,12 @@ class MainWindow(QMainWindow):
             "Walls stay on the uniform grid, so thrust/Isp are unchanged.\n"
             "The field view is shown across the true physical length, so the\n"
             "plume appears longer; the far field is coarser (bigger cells).")
+        self.cfg_panel.edits["outlet_relax"].setToolTip(
+            "Subsonic pressure-outlet relaxation. 1 = hard pin to ambient\n"
+            "(classic, used for all validation) — anchors back-pressure\n"
+            "exactly but reflects pressure/vortex disturbances back\n"
+            "upstream. 0.2–0.5 lets those waves leave the domain (use for\n"
+            "unsteady plume runs); the mean pressure is still held.")
         self.cfg_panel.edits["mut_max_ratio"].setToolTip(
             "Cap on the SST eddy viscosity, as a multiple of the laminar\n"
             "viscosity. 1e5 = classic sanity clamp (default, validated).\n"

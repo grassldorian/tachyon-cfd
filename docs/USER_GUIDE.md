@@ -135,6 +135,18 @@ The static state of the external environment, applied at domain edges and the
   form.
 - **Static temperature [K]** — ambient temperature (mainly affects the
   entrained-air state and plume mixing). `288.15` = sea level standard.
+- **Outlet relax [0–1]** — how hard the red pressure outlet pins its pressure
+  to ambient where flow crosses it subsonically (incl. backflow). `1` =
+  classic hard pin (default, used for all validation): back-pressure is
+  anchored exactly but arriving disturbances partially reflect. **0.2–0.5**
+  softens those reflections on unsteady plume runs. Honest note: the effect
+  is modest — most near-outlet pressure activity in a billowing plume is the
+  vortices themselves (their low-pressure cores genuinely pull ambient back
+  in). The *strongest* fixes are moving the outlet away from the action:
+  raise **Plume length ×** in the designer, or use **Plume stretch** — its
+  coarse far grid acts as a natural sponge that damps structures before they
+  reach the boundary. Supersonic outflow (jet core) always extrapolates
+  cleanly regardless of this setting.
 
 ---
 
