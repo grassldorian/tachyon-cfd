@@ -205,15 +205,50 @@ INLET = (0, 0, 255)
 OUTLET = (255, 0, 0)
 
 
+def _polygon_sdf(X: np.ndarray, Y: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """Signed distance from the points (X, Y) to a closed polygon.
+
+    ``poly`` is (N, 2); the closing edge is implicit. Negative inside.
+    Exact distance to the boundary; inside/outside via even-odd ray casting.
+    """
+    P = np.asarray(poly, dtype=np.float64)
+    if not np.allclose(P[0], P[-1]):
+        P = np.vstack([P, P[0]])
+    d2 = np.full(X.shape, np.inf, dtype=np.float64)
+    inside = np.zeros(X.shape, dtype=bool)
+    for k in range(len(P) - 1):
+        ax_, ay_ = P[k]
+        bx_, by_ = P[k + 1]
+        dx_, dy_ = bx_ - ax_, by_ - ay_
+        L2 = dx_ * dx_ + dy_ * dy_
+        if L2 < 1e-18:
+            continue
+        t = np.clip(((X - ax_) * dx_ + (Y - ay_) * dy_) / L2, 0.0, 1.0)
+        qx = ax_ + t * dx_
+        qy = ay_ + t * dy_
+        d2 = np.minimum(d2, (X - qx) ** 2 + (Y - qy) ** 2)
+        # even-odd ray cast along +x
+        cond = (ay_ > Y) != (by_ > Y)
+        if np.any(cond):
+            xint = ax_ + (Y - ay_) * dx_ / (dy_ if abs(dy_) > 1e-15 else 1e-15)
+            inside ^= cond & (X < xint)
+    d = np.sqrt(d2)
+    return np.where(inside, -d, d).astype(np.float32)
+
+
 def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    engine_px: int = 620, plume_factor: float = 1.6,
                    wall_mm: float | None = None, add_inlet: bool = True,
-                   inlet_frac: float = 0.75):
+                   inlet_frac: float = 0.75, analytic: bool = False):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
 
     Returns (rgb uint8 array (H, W, 3), info dict). ``info`` carries
     ``meters_per_pixel`` so the physical size is preserved in the solver, plus
-    the throat resolution and grid size for the UI.
+    the throat resolution and grid size for the UI. With ``analytic=True``
+    (used on send-to-solver; costs ~a second) ``info['node_phi']`` holds the
+    exact signed distance from the analytic wall contour at every mesh node —
+    the solver's cut-cell surface then follows the true curve with zero
+    rasterization ripple.
     """
     from PIL import Image, ImageDraw
 
@@ -280,4 +315,40 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                 px_per_mm=px_per_mm, nx=W, ny=H,
                 throat_px=2.0 * rt * px_per_mm,
                 exit_px=2.0 * re * px_per_mm)
+
+    if analytic:
+        # ---- exact node level set from the analytic contour ----
+        # node (J, I) sits at pixel corner (x=I, y=J) in final-pixel coords
+        def fx(xmm):
+            return (xmm + x_off) * px_per_mm
+
+        def fy(rmm):
+            return axis_y - rmm * px_per_mm
+
+        Xn, Yn = np.meshgrid(np.arange(W + 1, dtype=np.float64),
+                             np.arange(H + 1, dtype=np.float64))
+        xs_px = fx(x)                              # bore contour in px
+        band_polys = []
+        for sgn in (+1, -1):
+            bore = np.column_stack([xs_px, fy(sgn * r)])
+            outer = np.column_stack([xs_px, fy(sgn * (r + wall_mm))])[::-1]
+            band_polys.append(np.vstack([bore, outer]))
+        face = np.array([[fx(-face_mm), fy(rc + wall_mm)],
+                         [fx(0.0),      fy(rc + wall_mm)],
+                         [fx(0.0),      fy(-(rc + wall_mm))],
+                         [fx(-face_mm), fy(-(rc + wall_mm))]])
+        sdf = np.minimum(_polygon_sdf(Xn, Yn, band_polys[0]),
+                         _polygon_sdf(Xn, Yn, band_polys[1]))
+        sdf_face = _polygon_sdf(Xn, Yn, face)
+        if add_inlet:
+            ir = max(inlet_frac, 0.05) * rc
+            # extend a hair past x=0 so the recess opens cleanly into the
+            # chamber (no coincident boundaries)
+            inlet = np.array([[fx(-0.5 * face_mm), fy(ir)],
+                              [fx(0.0) + 0.75,     fy(ir)],
+                              [fx(0.0) + 0.75,     fy(-ir)],
+                              [fx(-0.5 * face_mm), fy(-ir)]])
+            sdf_face = np.maximum(sdf_face, -_polygon_sdf(Xn, Yn, inlet))
+        sdf = np.minimum(sdf, sdf_face)
+        info["node_phi"] = sdf.astype(np.float32)   # phi > 0 in fluid
     return rgb, info

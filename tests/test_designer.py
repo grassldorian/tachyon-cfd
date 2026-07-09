@@ -45,6 +45,28 @@ assert left_open == 0, "inlet open to the outside (both sides)!"
 assert right_touch > 0, "inlet does not open into the chamber"
 print(f"injector face: inlet backed by wall, {right_touch} cells into chamber")
 
+# 1c. analytic level set: the wall surface must lie exactly on the analytic
+#     contour (zero rasterization ripple) — straight cone section check
+geo_l = dict(chamber_l=0.12, chamber_d=0.08, throat_d=0.03,
+             nozzle_l=0.30, exit_d=0.14)
+_, info_l = ed.rasterize_mask(geo_l, "Conical (15°)", engine_px=400,
+                              plume_factor=0.5, analytic=True)
+phi = info_l["node_phi"]
+H1, W1 = phi.shape
+xs, ys = [], []
+for i in range(int(W1 * 0.50), int(W1 * 0.65)):
+    c = phi[:H1 // 2, i]
+    cr = np.nonzero((c[:-1] < 0) & (c[1:] >= 0))[0]
+    if len(cr):
+        j = cr[-1]
+        ys.append(j + c[j] / (c[j] - c[j + 1]))
+        xs.append(i)
+A = np.vstack([np.array(xs, float), np.ones(len(xs))]).T
+coef, _, _, _ = np.linalg.lstsq(A, np.array(ys), rcond=None)
+rms = float(np.sqrt(np.mean((np.array(ys) - A @ coef) ** 2)))
+assert rms < 1e-3, f"analytic surface not exact: RMS {rms:.5f} px"
+print(f"analytic SDF: cone-wall surface RMS {rms:.6f} px (exact)")
+
 # 2. the mask loads into the solver pipeline with fluid + inlet cells
 import tempfile
 from PIL import Image

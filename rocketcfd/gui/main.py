@@ -43,10 +43,11 @@ class SolverWorker(QThread):
     error = Signal(str)
     initialized = Signal()
 
-    def __init__(self, png_path: str, cfg: SimConfig):
+    def __init__(self, png_path: str, cfg: SimConfig, node_phi=None):
         super().__init__()
         self.png_path = png_path
         self.cfg = cfg
+        self.node_phi = node_phi      # analytic level set from the designer
         self.running = False          # paused vs running
         self.stop_requested = False
         self.run_until_converged = False  # auto-stop when thrust flattens
@@ -61,7 +62,8 @@ class SolverWorker(QThread):
                              sigma=self.cfg.boundary_sigma,
                              mesh_scale=self.cfg.mesh_scale,
                              axisym_center=(self.cfg.axisymmetric and
-                                            self.cfg.axis_location == "center"))
+                                            self.cfg.axis_location == "center"),
+                             node_phi=self.node_phi)
             if mask.n_fluid == 0:
                 raise RuntimeError("No fluid (white) cells found in the image.")
             self.status_msg.emit("Compiling CUDA kernels…")
@@ -372,6 +374,7 @@ class MainWindow(QMainWindow):
 
         self.worker: SolverWorker | None = None
         self.png_path: str | None = None
+        self._node_phi = None         # analytic designer level set (or None)
         self.last_snap: dict | None = None
         self.overlay_rgba: np.ndarray | None = None
         # plume-stretch display remap: nearest computational column per
@@ -517,9 +520,9 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.field_combo)
         bar.addWidget(QLabel("Colormap:"))
         self.cmap_combo = QComboBox()
-        self.cmap_combo.addItems(["turbo", "viridis", "plasma", "inferno",
-                                  "magma", "cividis", "RdYlBu", "Spectral",
-                                  "jet", "hot", "coolwarm", "twilight",
+        self.cmap_combo.addItems(["twilight", "turbo", "viridis", "plasma",
+                                  "inferno", "magma", "cividis", "RdYlBu",
+                                  "Spectral", "jet", "hot", "coolwarm",
                                   "nipy_spectral"])
         self.cmap_combo.currentTextChanged.connect(self.refresh_view)
         bar.addWidget(self.cmap_combo)
@@ -644,7 +647,7 @@ class MainWindow(QMainWindow):
         self.scalebar = None
         self.img_nx = self.img_ny = 0
         self.world_rect: QRectF | None = None
-        self.cbar = pg.ColorBarItem(colorMap=get_cmap("turbo"), width=18)
+        self.cbar = pg.ColorBarItem(colorMap=get_cmap("twilight"), width=18)
         self.cbar.setImageItem(self.img_item)
         try:                                  # fixed width: no jitter when
             self.cbar.getAxis("right").setWidth(80)   # tick labels change
@@ -784,7 +787,13 @@ class MainWindow(QMainWindow):
             cp.gasmodel_combo.setCurrentIndex(0)
             idx = cp.prop_combo.findText("Custom")
             cp.prop_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.load_image_path(path)
+        node_phi = None
+        if meta and meta.get("node_phi_path"):
+            try:
+                node_phi = np.load(meta["node_phi_path"])
+            except Exception:
+                node_phi = None
+        self.load_image_path(path, node_phi=node_phi)
         self.tabs.setCurrentIndex(0)
         self.statusBar().showMessage(
             "Engine loaded from the designer — press Initialize.", 10000)
@@ -866,8 +875,9 @@ class MainWindow(QMainWindow):
         if self.png_path:
             self.load_image_path(self.png_path)
 
-    def load_image_path(self, path: str):
+    def load_image_path(self, path: str, node_phi=None):
         self.png_path = path
+        self._node_phi = node_phi     # analytic level set (designer only)
         self.lbl_png.setText(Path(path).name)
         try:
             cfg = self.cfg_panel.get_config()
@@ -879,7 +889,8 @@ class MainWindow(QMainWindow):
                              sigma=cfg.boundary_sigma,
                              mesh_scale=cfg.mesh_scale,
                              axisym_center=(cfg.axisymmetric and
-                                            cfg.axis_location == "center"))
+                                            cfg.axis_location == "center"),
+                             node_phi=node_phi)
         except Exception as e:
             QMessageBox.critical(self, "Tachyon CFD", f"Could not load image:\n{e}")
             return
@@ -975,7 +986,8 @@ class MainWindow(QMainWindow):
         self._replay_count = 0
         self.replay_bar.setVisible(False)
         self.shutdown_worker()
-        self.worker = SolverWorker(self.png_path, cfg)
+        self.worker = SolverWorker(self.png_path, cfg,
+                                   node_phi=getattr(self, "_node_phi", None))
         self.worker.snapshot_ready.connect(self.on_snapshot)
         self.worker.status_msg.connect(lambda m: self.statusBar().showMessage(m, 15000))
         self.worker.error.connect(self.on_error)

@@ -272,17 +272,36 @@ class DesignerTab(QWidget):
                                 "Adjust the geometry first.")
             return
         from PIL import Image
+        # re-render with the exact analytic level set (zero raster ripple);
+        # the live preview skips this because it costs ~a second
+        try:
+            geom = self._read_geom()
+            res = max(120, int(float(self.res_edit.text())))
+            plume = max(0.2, float(self.plume_edit.text()))
+            inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
+            rgb, info = ed.rasterize_mask(
+                geom, self._nozzle(), engine_px=res, plume_factor=plume,
+                add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
+                analytic=True)
+            self._rgb, self._info = rgb, info
+        except ValueError:
+            rgb, info = self._rgb, self._info      # keep the last valid mask
         path = str(Path(tempfile.gettempdir()) / "tachyon_designed_engine.png")
-        Image.fromarray(self._rgb).save(path)
+        Image.fromarray(rgb).save(path)
         prop = ed.PROPELLANTS[self.prop_combo.currentText()]
         try:
             pc = float(self.pc_edit.text()) * 1e5
         except ValueError:
             pc = 2.0e6
         meta = dict(
-            meters_per_pixel=self._info["meters_per_pixel"],
+            meters_per_pixel=info["meters_per_pixel"],
             axisymmetric=True, axis_location="center",
             gamma=prop["gamma"], R_gas=ed.R_UNIVERSAL / prop["M"],
             inlet_T0=prop["Tc"], inlet_p0=pc,
         )
+        if "node_phi" in info:
+            phi_path = str(Path(tempfile.gettempdir())
+                           / "tachyon_designed_engine_phi.npy")
+            np.save(phi_path, info["node_phi"])
+            meta["node_phi_path"] = phi_path
         self.send_cb(path, meta)

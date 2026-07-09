@@ -149,24 +149,14 @@ def _wall_coverage(rgb: np.ndarray, ctype_img: np.ndarray) -> np.ndarray:
     return cov
 
 
-def _cut_cell_geometry(solid: np.ndarray, sigma: float):
-    """Smooth level set -> face apertures and cell volume fractions.
-
-    ``solid`` is the per-pixel solid fraction (0..1; binary or anti-aliased).
-    Returns (ax, ay, lam) on the interior (ny, nx) grid:
+def _geometry_from_phi(phi: np.ndarray):
+    """Node level set (phi > 0 in fluid, shape (ny+1, nx+1)) -> cut-cell
+    geometry. Returns (ax, ay, lam) on the interior (ny, nx) grid:
       ax[j, i] = aperture of the west face of cell (j, i), shape (ny, nx+1)
       ay[j, i] = aperture of the north face of cell (j, i), shape (ny+1, nx)
       lam      = fluid volume fraction, shape (ny, nx)
     """
-    ny, nx = solid.shape
-    s = ndimage.gaussian_filter(solid.astype(np.float32), sigma=sigma,
-                                mode="nearest")
-
-    # level set at cell corners (nodes), phi > 0 in fluid
-    sp = np.pad(s, 1, mode="edge")
-    node = 0.25 * (sp[:-1, :-1] + sp[:-1, 1:] + sp[1:, :-1] + sp[1:, 1:])
-    phi = (0.5 - node).astype(np.float32)            # (ny+1, nx+1)
-
+    ny, nx = phi.shape[0] - 1, phi.shape[1] - 1
     # x-faces: endpoints are nodes (j, i) and (j+1, i)   -> (ny, nx+1)
     ax = _face_aperture(phi[:-1, :], phi[1:, :])
     # y-faces: endpoints are nodes (j, i) and (j, i+1)   -> (ny+1, nx)
@@ -186,10 +176,29 @@ def _cut_cell_geometry(solid: np.ndarray, sigma: float):
     return ax, ay, lam
 
 
+def _cut_cell_geometry(solid: np.ndarray, sigma: float):
+    """Smooth level set from a per-pixel solid fraction (0..1; binary or
+    anti-aliased) -> cut-cell geometry via ``_geometry_from_phi``."""
+    s = ndimage.gaussian_filter(solid.astype(np.float32), sigma=sigma,
+                                mode="nearest")
+    # level set at cell corners (nodes), phi > 0 in fluid
+    sp = np.pad(s, 1, mode="edge")
+    node = 0.25 * (sp[:-1, :-1] + sp[:-1, 1:] + sp[1:, :-1] + sp[1:, 1:])
+    phi = (0.5 - node).astype(np.float32)            # (ny+1, nx+1)
+    return _geometry_from_phi(phi)
+
+
 def load_mask(path: str, meters_per_pixel: float, svg_raster_px: int = 1000,
               smooth: bool = True, sigma: float = 1.2,
               mesh_scale: float = 1.0,
-              axisym_center: bool = False) -> DomainMask:
+              axisym_center: bool = False,
+              node_phi: np.ndarray | None = None) -> DomainMask:
+    """``node_phi``: optional analytic level set sampled at the pixel-corner
+    nodes, shape (ny+1, nx+1), phi > 0 in fluid (e.g. an exact signed
+    distance from the engine designer). When given and matching the image
+    size, it replaces the image-derived smoothed level set, so the wall
+    surface follows the analytic contour exactly. Ignored (with a note) when
+    the shape does not match, e.g. after mesh_scale resampling."""
     rgb = load_image(path, svg_raster_px)
     if mesh_scale and abs(mesh_scale - 1.0) > 1e-6:
         rgb = resample_rgb(rgb, mesh_scale)
@@ -220,8 +229,15 @@ def load_mask(path: str, meters_per_pixel: float, svg_raster_px: int = 1000,
     lam_pad = np.ones((ny + 4, nx + 4), dtype=np.float32)
     is_smooth = bool(smooth and (ctype_img == WALL).any())
     if is_smooth:
-        ax_i, ay_i, lam_i = _cut_cell_geometry(_wall_coverage(rgb, ctype_img),
-                                               sigma)
+        if node_phi is not None and node_phi.shape == (ny + 1, nx + 1):
+            ax_i, ay_i, lam_i = _geometry_from_phi(
+                np.asarray(node_phi, dtype=np.float32))
+        else:
+            if node_phi is not None:
+                print("note: analytic level set does not match the image "
+                      f"size {nx}x{ny} - using the image-derived surface")
+            ax_i, ay_i, lam_i = _cut_cell_geometry(
+                _wall_coverage(rgb, ctype_img), sigma)
         # inlets/outlets are boundary conditions, not geometry: fully open
         inl = ctype_img == INLET
         outl = ctype_img == OUTLET

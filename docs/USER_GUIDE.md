@@ -287,9 +287,13 @@ then hands it to the solver.
   *Plume length ×* the downstream domain, and the **pressure inlet** is placed
   on the injector face at the chosen *Inlet Ø [% chamber]*.
 - **Send to solver →** rasterizes the geometry to a Tachyon mask (black walls,
-  white flow, blue inlet, red outlet), carries the scale + gas + chamber
-  pressure into the Simulation panel, and switches to it. Then just press
-  **⟲ Initialize** and **▶︎ Run**.
+  white flow, blue inlet, red outlet) **plus an exact analytic level set**: the
+  cut-cell wall surface is built from the true signed distance to the Rao/cone
+  contour, so it follows the analytic curve with zero rasterization ripple.
+  The scale + gas + chamber pressure are carried into the Simulation panel
+  automatically. Then just press **⟲ Initialize** and **▶︎ Run**. (Changing
+  *Mesh density* afterwards re-rasterizes and falls back to the image-derived
+  surface — set the resolution in the designer instead.)
 
 The performance shown in the designer is the *ideal 1-D* estimate; the CFD run
 gives the real number (and accounts for divergence, viscous and expansion
