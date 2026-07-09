@@ -234,10 +234,18 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     H += H % 2                                      # even -> symmetric axis
     axis_y = H / 2.0
 
-    def px(xmm, rmm):
-        return (xmm + x_off) * px_per_mm, axis_y - rmm * px_per_mm
+    # 4x supersampled rendering, box-downsampled: edge pixels then carry the
+    # true sub-pixel wall fraction (anti-aliased coverage), which the cut-cell
+    # level set in mask.py reads directly -> the reconstructed wall follows
+    # the analytic contour instead of rippling around a binary staircase.
+    SS = 4
+    ss = float(SS)
 
-    img = Image.new("RGB", (W, H), FLOW)
+    def px(xmm, rmm):
+        return ((xmm + x_off) * px_per_mm * ss,
+                (axis_y - rmm * px_per_mm) * ss)
+
+    img = Image.new("RGB", (W * SS, H * SS), FLOW)
     d = ImageDraw.Draw(img)
 
     # upper + lower nozzle walls (band between the bore contour and contour+wall)
@@ -249,24 +257,24 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     # injector face: solid plate that IS part of the engine — spans the full
     # chamber diameter (+ walls) and sits at x in [-face_mm, 0] so the chamber
     # volume is untouched and the plate merges with the wall bands at x = 0.
-    fx0, _ = px(-face_mm, 0.0)
-    fx1, _ = px(0.0, 0.0)
-    d.rectangle([fx0, axis_y - (rc + wall_mm) * px_per_mm,
-                 fx1, axis_y + (rc + wall_mm) * px_per_mm], fill=WALL)
+    fx0, fy0 = px(-face_mm, rc + wall_mm)
+    fx1, fy1 = px(0.0, -(rc + wall_mm))
+    d.rectangle([fx0, fy0, fx1, fy1], fill=WALL)
 
     # pressure inlet: blue opening set INTO the face plate, on the chamber
     # side only — the outer half of the plate stays black, so the inlet feeds
     # the chamber and is closed toward the outside (never open on both sides).
     if add_inlet:
         ir = max(inlet_frac, 0.05) * rc
-        ix0, _ = px(-0.5 * face_mm, 0.0)
-        d.rectangle([ix0, axis_y - ir * px_per_mm,
-                     fx1, axis_y + ir * px_per_mm], fill=INLET)
+        ix0, iy0 = px(-0.5 * face_mm, ir)
+        ix1, iy1 = px(0.0, -ir)
+        d.rectangle([ix0, iy0, ix1, iy1], fill=INLET)
 
     # pressure outlet: red strip down the downstream (right) edge
     rw = max(2, int(round(0.004 * W)))
-    d.rectangle([W - rw, 0, W - 1, H - 1], fill=OUTLET)
+    d.rectangle([(W - rw) * SS, 0, W * SS - 1, H * SS - 1], fill=OUTLET)
 
+    img = img.resize((W, H), Image.Resampling.BOX)  # -> coverage grays
     rgb = np.asarray(img, dtype=np.uint8)
     info = dict(meters_per_pixel=1.0e-3 / px_per_mm,
                 px_per_mm=px_per_mm, nx=W, ny=H,

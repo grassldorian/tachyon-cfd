@@ -29,17 +29,21 @@ for nozzle in ("Conical (15°)", "Bell (Rao 80%)"):
     print(f"{nozzle:16s}: {info['nx']}x{info['ny']}  inlet_px={blue}  ok")
 
 # 1b. the inlet is set INTO the injector face: closed toward the outside
-#     (black backing on the left), open only into the chamber (white on right)
+#     (wall backing on the left), open only into the chamber. Checked at the
+#     classified cell-type level (the AA rendering blends edge pixel colors,
+#     so raw-color adjacency would be too strict).
+from rocketcfd.mask import classify_pixels, FLUID as CF, INLET as CI
 rgb, info = ed.rasterize_mask(geom, "Conical (15°)", engine_px=400)
-blue = (rgb[:, :, 2] > 150) & (rgb[:, :, 0] < 80) & (rgb[:, :, 1] < 80)
-white = np.all(rgb > 200, axis=2)
-js, is_ = np.nonzero(blue)
-left_open = sum(1 for j, i in zip(js, is_) if i > 0 and white[j, i - 1])
+ct = classify_pixels(rgb)
+inl = ct == CI
+fl = ct == CF
+js, is_ = np.nonzero(inl)
+left_open = sum(1 for j, i in zip(js, is_) if i > 0 and fl[j, i - 1])
 right_touch = sum(1 for j, i in zip(js, is_)
-                  if i + 1 < rgb.shape[1] and white[j, i + 1])
+                  if i + 1 < ct.shape[1] and fl[j, i + 1])
 assert left_open == 0, "inlet open to the outside (both sides)!"
 assert right_touch > 0, "inlet does not open into the chamber"
-print(f"injector face: inlet backed by wall, {right_touch} px into chamber")
+print(f"injector face: inlet backed by wall, {right_touch} cells into chamber")
 
 # 2. the mask loads into the solver pipeline with fluid + inlet cells
 import tempfile
