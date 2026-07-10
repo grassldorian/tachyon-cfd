@@ -26,7 +26,32 @@ from ..cuda_kernels import axis_j
 from ..mask import load_mask, load_image, WALL, INLET, OUTLET, FLUID
 
 
+# "SpaceX" — diverging blue→cyan→white→orange→deep-red with dark ends, hand
+# matched to the colormap in SpaceX's in-house nozzle-flow solver renders.
+_SPACEX_STOPS = [
+    (0.00, (  9,  18,  66)),   # deep navy
+    (0.13, ( 25,  72, 160)),   # dark blue
+    (0.27, ( 38, 138, 222)),   # blue
+    (0.40, ( 92, 208, 238)),   # vivid cyan
+    (0.48, (200, 236, 246)),   # pale cyan
+    (0.52, (252, 244, 232)),   # warm white
+    (0.60, (250, 208, 138)),   # light orange
+    (0.70, (241, 148,  56)),   # orange
+    (0.80, (214,  78,  30)),   # red
+    (0.90, (156,  26,  16)),   # dark red
+    (1.00, ( 78,   8,   8)),   # maroon
+]
+
+
+def _spacex_cmap() -> pg.ColorMap:
+    pos = [p for p, _ in _SPACEX_STOPS]
+    col = [(r, g, b, 255) for _, (r, g, b) in _SPACEX_STOPS]
+    return pg.ColorMap(pos, col)
+
+
 def get_cmap(name: str) -> pg.ColorMap:
+    if name.lower().replace(" ", "") == "spacex":
+        return _spacex_cmap()
     try:
         return pg.colormap.get(name)
     except Exception:
@@ -539,10 +564,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.field_combo)
         bar.addWidget(QLabel("Colormap:"))
         self.cmap_combo = QComboBox()
-        self.cmap_combo.addItems(["twilight", "turbo", "viridis", "plasma",
-                                  "inferno", "magma", "cividis", "RdYlBu",
-                                  "Spectral", "jet", "hot", "coolwarm",
-                                  "nipy_spectral"])
+        self.cmap_combo.addItems(["SpaceX", "twilight", "turbo", "viridis",
+                                  "plasma", "inferno", "magma", "cividis",
+                                  "RdYlBu", "Spectral", "jet", "hot",
+                                  "coolwarm", "nipy_spectral"])
         self.cmap_combo.currentTextChanged.connect(self.refresh_view)
         bar.addWidget(self.cmap_combo)
         self.auto_chk = QCheckBox("Auto range")
@@ -673,7 +698,7 @@ class MainWindow(QMainWindow):
         self.scalebar = None
         self.img_nx = self.img_ny = 0
         self.world_rect: QRectF | None = None
-        self.cbar = pg.ColorBarItem(colorMap=get_cmap("twilight"), width=18)
+        self.cbar = pg.ColorBarItem(colorMap=get_cmap("SpaceX"), width=18)
         self.cbar.setImageItem(self.img_item)
         try:                                  # fixed width: no jitter when
             self.cbar.getAxis("right").setWidth(80)   # tick labels change

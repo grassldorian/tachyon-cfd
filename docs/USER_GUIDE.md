@@ -256,6 +256,9 @@ When to stop and how often to refresh.
 - **Field selector** — choose what to color by (Mach, pressure, temperature,
   density, velocity, wall heat flux, and—if two-gamma is on—mixture fraction /
   local gamma).
+- **Colormap** — includes **SpaceX** (the default): a diverging
+  blue→cyan→white→orange→deep-red map hand-matched to the palette in SpaceX's
+  in-house nozzle-flow renders, plus twilight, turbo, viridis, and the rest.
 - **Colormap** + **min / max** — palette and manual color-scale limits (blank =
   autoscale).
 - **Show mesh** — overlay the smooth embedded wall surface and, when zoomed,
