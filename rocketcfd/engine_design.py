@@ -332,7 +332,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     if expand_deg > 0.0:
         slope = math.tan(math.radians(min(expand_deg, 60.0)))
         x_end = W / px_per_mm - x_off              # right edge in engine mm
-        r0 = re + wall_mm                          # duct mouth at the exit lip
+        r0 = re                                    # flush with the nozzle bore
         Rf = rmax + wall_mm + margin_r + 20.0      # beyond the domain edge
         for sgn in (+1, -1):
             wedge = [px(L, sgn * r0),
@@ -408,7 +408,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
             # add the two diverging duct walls to the solid (union -> minimum)
             slope = math.tan(math.radians(min(expand_deg, 60.0)))
             x_end = W / px_per_mm - x_off
-            r0 = re + wall_mm
+            r0 = re                                # flush with the nozzle bore
             Rf = rmax + wall_mm + margin_r + 20.0
             re2 = r0 + slope * (x_end + 20.0 - L)
             for sgn in (+1, -1):
