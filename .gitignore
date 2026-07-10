@@ -25,3 +25,4 @@ engines/
 # scratch / scratch commit messages
 _*.txt
 _*.py
+_*.png
