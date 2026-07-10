@@ -563,6 +563,13 @@ class MainWindow(QMainWindow):
             "centerline profile and wall-pressure distribution.")
         self.btn_probe.toggled.connect(self.toggle_probe)
         bar.addWidget(self.btn_probe)
+        self.wall_combo = QComboBox()
+        self.wall_combo.addItems(["white walls", "black walls"])
+        self.wall_combo.setToolTip(
+            "Color of the engine walls in the field view and in the\n"
+            "'Export field PNG' image.")
+        self.wall_combo.currentIndexChanged.connect(self._wall_color_changed)
+        bar.addWidget(self.wall_combo)
         self.btn_theme = QPushButton("◐")
         self.btn_theme.setFixedWidth(52)
         self.btn_theme.setToolTip("GUI color scheme")
@@ -981,10 +988,20 @@ class MainWindow(QMainWindow):
         else:
             self.axis_line.hide()
 
+    def _wall_rgb(self):
+        """Wall color chosen in the field toolbar (white or black)."""
+        return ((255, 255, 255) if self.wall_combo.currentIndex() == 0
+                else (12, 12, 12))
+
+    def _wall_color_changed(self, *_):
+        if self.mask_ct is not None:
+            self.set_overlay(self.mask_ct)
+        self.refresh_view()
+
     def set_overlay(self, ctype: np.ndarray):
         h, w = ctype.shape
         rgba = np.zeros((h, w, 4), dtype=np.ubyte)
-        rgba[ctype == WALL] = (255, 255, 255, 255)
+        rgba[ctype == WALL] = (*self._wall_rgb(), 255)
         rgba[ctype == INLET] = (30, 110, 255, 200)
         rgba[ctype == OUTLET] = (230, 60, 50, 200)
         self.overlay_rgba = rgba
@@ -1487,7 +1504,7 @@ class MainWindow(QMainWindow):
         idx = ((np.nan_to_num(disp, nan=lo, posinf=hi, neginf=lo) - lo)
                * (255.0 / (hi - lo))).clip(0, 255)
         rgb = lut[idx.astype(np.uint8)]
-        rgb[walls] = (255, 255, 255)              # walls render white
+        rgb[walls] = self._wall_rgb()             # toolbar wall color
         from PIL import Image
         Image.fromarray(rgb).save(path)
         self.statusBar().showMessage(

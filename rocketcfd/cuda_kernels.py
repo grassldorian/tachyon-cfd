@@ -340,11 +340,19 @@ __device__ St fetch(const float* P, const unsigned char* ct, const float* wd,
             // vortices crossing the outlet leave instead of reflecting.
 #if OUTRELAXONE
             q.p = PFAR;                       // hard pin (bit-exact default)
+            q.u = uo; q.v = vo;
 #else
             q.p = po + OUTRELAX * (PFAR - po);
+            // soft outlet (outlet_relax < 1): backflow re-enters along the
+            // face normal only, capped near M~0.5 of the ambient sound speed.
+            // Mirroring the full incident velocity lets entrainment-driven
+            // suction jets snake upstream along the domain edges and
+            // self-reinforce; capped normal-only inflow still feeds the
+            // jet's entrainment demand without the runaway.
+            float ain = fminf(into, 0.5f * sqrtf(1.4f * RGFAR * TFAR));
+            q.u = ain * sxd; q.v = ain * syd;
 #endif
             q.T = TFAR; q.rho = q.p / (RGFAR * TFAR);
-            q.u = uo; q.v = vo;
             q.k = KFAR; q.w = WFAR;
             q.mul = suth(TFAR); q.mut = 0.0f; q.F1 = 1.0f;
             return q;

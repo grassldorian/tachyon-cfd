@@ -262,8 +262,18 @@ When to stop and how often to refresh.
   the cell edges.
 - **Probe** — click two points to plot p, Mach and T along that line; the dialog
   has centerline and wall-pressure presets.
+- **Walls: white/black** — color of the engine walls in the field view and in
+  the *Export field PNG* image.
 - **◐ (color scheme)** — pick the GUI theme: Mono (B&W), Light, Dark,
   Blueprint, or Midnight.
+
+> **Seeing ambient flow "creeping back" along the domain edges near the
+> outlet?** That is usually the *return leg of the entrainment loop*, not a
+> boundary error: the jet pumps gas outward, and in an enclosed, narrow
+> domain the only supply path is back along the edges — a steady
+> recirculation torus. Give it room: raise *Radial margin ×* and/or *Plume
+> length ×* in the designer, and set *Outlet relax* to 0.2–0.5 so the return
+> flow enters gently (normal-only, speed-capped) instead of reflecting.
 
 ---
 
