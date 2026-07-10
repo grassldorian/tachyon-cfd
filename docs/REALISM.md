@@ -169,6 +169,18 @@ out of scope unless requested.
 - **Mesh-independence helper**: with `mesh_scale` in place, an automated
   2-point Richardson check (run at 1× and 1.5×, report the thrust delta)
   quantifies discretization error per engine.
+- **TENO5 / WENO-Z — evaluated and rejected (2026-06):** TENO5 (Fu-Hu-Adams,
+  sharp stencil cut-off) was implemented and tested at cut-offs CT = 1e-5 …
+  5e-3: it blew up on the standard 40-bar nozzle case at every setting
+  (Mach → 1e3 garbage). Root cause: TENO recovers the exact linear 5th-order
+  scheme in smooth regions — zero background dissipation — which this
+  float32, component-wise-reconstruction, SSP-RK2 solver relies on for
+  stability (same fundamental-mismatch class as AUSM+-up). WENO-Z (Borges
+  q=1) was tested as the robust middle ground: stable, but measured
+  *identical* far-plume gradient retention to the existing WENO-JS (274.9 vs
+  275.1), so it does not earn a menu slot. Practical sharpness levers that DO
+  measure: WENO5 (+24 % vs MUSCL), van Leer/superbee limiter, mesh
+  resolution, and the eddy-viscosity cap.
 - **Reconstruction / limiters (DONE 2026-06):** added **WENO5** (5th-order,
   far lower dissipation — preserves ~24 % more downstream shock-cell
   structure than MUSCL-minmod on the test nozzle) plus **van Leer** and

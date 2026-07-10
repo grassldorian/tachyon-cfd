@@ -149,7 +149,8 @@ class SimConfig:
                                              #   viscous time-step limit)
 
     flux_scheme: str = "hllc"                # "hllc" | "hll" | "roe" | "ausm"
-    muscl_order: int = 2                     # 1 = first order, 2 = MUSCL
+    muscl_order: int = 2                     # 1 = first order, 2 = MUSCL,
+                                             #   5 = WENO5
     limiter: str = "minmod"                  # "minmod" or "vanalbada"
     cfl: float = 0.40
     viscous: bool = True

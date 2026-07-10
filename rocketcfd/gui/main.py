@@ -237,13 +237,19 @@ class ConfigPanel(QWidget):
             "equilibrium gas model (it falls back to HLLC there).")
         num.addRow("Riemann solver", self.flux_combo)
         self.order_combo = QComboBox()
-        self.order_combo.addItems(["2nd order (MUSCL)", "1st order",
+        self.order_combo.addItems(["1st order", "2nd order (MUSCL)",
                                    "5th order (WENO)"])
+        self.order_combo.setCurrentIndex(1)
         self.order_combo.setToolTip(
-            "WENO5 has far lower numerical dissipation than MUSCL — shock\n"
-            "diamonds and shear layers survive much further downstream.\n"
-            "It runs in the interior fluid and falls back to MUSCL next to\n"
-            "walls. Slower per step; pairs well with a fine mesh.")
+            "Reconstruction accuracy, in ascending sharpness:\n"
+            "1st — very diffusive (debugging only).\n"
+            "2nd MUSCL — robust default.\n"
+            "5th WENO — far lower dissipation; shock diamonds and shear\n"
+            "layers survive much further downstream. Runs in the interior\n"
+            "and falls back to MUSCL next to walls; slower per step.\n"
+            "(TENO5 and WENO-Z were evaluated and rejected: TENO's zero\n"
+            "background dissipation is unstable in this float32 solver,\n"
+            "WENO-Z measured identical to WENO here — see docs/REALISM.md.)")
         num.addRow("Spatial order", self.order_combo)
         self.limiter_combo = QComboBox()
         self.limiter_combo.addItems(["minmod", "van Albada", "van Leer",
@@ -258,7 +264,7 @@ class ConfigPanel(QWidget):
         self.viscous_chk = QCheckBox("Viscous (Navier–Stokes)")
         self.turb_chk = QCheckBox("Turbulence model (k-ω SST)")
         self.localdt_chk = QCheckBox("Local time stepping (steady)")
-        self.carbuncle_chk = QCheckBox("Carbuncle cure (HLLC shocks)")
+        self.carbuncle_chk = QCheckBox("HLLC shock filter")
         self.carbuncle_chk.setToolTip(
             "Blend HLLC toward HLL only at strong shocks (Ducros-gated) to\n"
             "cure the Mach-disk carbuncle instability. No effect away from\n"
@@ -306,7 +312,7 @@ class ConfigPanel(QWidget):
         s = cfg.flux_scheme.lower().rstrip("+")
         self.flux_combo.setCurrentIndex(schemes.index(s) if s in schemes else 0)
         self.order_combo.setCurrentIndex(
-            2 if cfg.muscl_order >= 5 else 0 if cfg.muscl_order >= 2 else 1)
+            2 if cfg.muscl_order >= 5 else 1 if cfg.muscl_order >= 2 else 0)
         self.limiter_combo.setCurrentIndex(
             {"minmod": 0, "vanalbada": 1, "vanleer": 2, "superbee": 3}
             .get(cfg.limiter.lower().replace(" ", ""), 0))
@@ -342,7 +348,7 @@ class ConfigPanel(QWidget):
             except ValueError:
                 raise ValueError(f"Invalid integer for '{label}'")
         cfg.flux_scheme = ["hllc", "hll", "roe", "ausm"][self.flux_combo.currentIndex()]
-        cfg.muscl_order = {0: 2, 1: 1, 2: 5}[self.order_combo.currentIndex()]
+        cfg.muscl_order = {0: 1, 1: 2, 2: 5}[self.order_combo.currentIndex()]
         cfg.limiter = ["minmod", "vanalbada", "vanleer",
                        "superbee"][self.limiter_combo.currentIndex()]
         cfg.wall_type = "noslip" if self.wall_combo.currentIndex() == 0 else "slip"

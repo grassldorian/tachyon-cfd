@@ -180,12 +180,17 @@ speed for sharpness or to stabilize a hard case.
   - *Roe* — sharp, perfect-gas only (auto-falls back to HLLC in equilibrium
     mode).
   - *AUSM+* — low-dissipation, good for shocks; can be lively on coarse meshes.
-- **Spatial order** — reconstruction:
-  - *2nd order (MUSCL)* — standard, good default.
+- **Spatial order** — reconstruction, ascending sharpness:
   - *1st order* — very diffusive; only for debugging/first convergence.
+  - *2nd order (MUSCL)* — standard, good default.
   - *5th order (WENO)* — much lower dissipation (shock diamonds & shear layers
     persist far downstream). Slower per step; pairs well with a fine mesh. Runs
     in the interior and falls back to MUSCL next to walls.
+  - (TENO5 and WENO-Z were evaluated and rejected: TENO's zero background
+    dissipation blows up in this float32 solver at any cut-off, and WENO-Z
+    measured indistinguishable from WENO-JS here — details in
+    [REALISM.md](REALISM.md). For extra crispness use WENO + van Leer/superbee
+    + more resolution instead.)
 - **Limiter** (MUSCL only) — slope limiter, least → most compressive:
   *minmod* (robust, diffusive) · *van Albada* · *van Leer* (sharp, good
   default) · *superbee* (sharpest, can over-steepen). If a case wobbles near
@@ -204,7 +209,7 @@ speed for sharpness or to stabilize a hard case.
 - **☑ Local time stepping (steady)** — each cell advances at its own max stable
   step to reach steady state much faster. **Keep on** for steady runs; turn off
   only if you want a time-accurate transient.
-- **☑ Carbuncle cure (HLLC shocks)** — blends HLLC→HLL *only* at strong shocks
+- **☑ HLLC shock filter** — blends HLLC→HLL *only* at strong shocks
   (Ducros-gated) to kill the Mach-disk "carbuncle" instability. No effect away
   from strong shocks; safe to leave on.
 - **☑ Compressibility correction (SST)** — Wilcox dilatational-dissipation
