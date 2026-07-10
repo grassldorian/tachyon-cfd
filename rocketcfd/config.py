@@ -161,6 +161,12 @@ class SimConfig:
 
     # --- Visualization / IO ---
     viz_interval: int = 25                   # GUI snapshot every N steps
+    replay_px: int = 500                     # replay recorder resolution: the
+                                             #   recorded frames' longest side
+                                             #   [px]. Raise to the grid size
+                                             #   for native/full-res videos
+                                             #   (memory: ~W*H*2 bytes/frame,
+                                             #   up to 400 frames)
 
     # ------------------------------------------------------------------
     def save(self, path: str | Path) -> None:

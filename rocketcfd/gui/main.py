@@ -157,6 +157,7 @@ INT_FIELDS = [
     ("inlet_ramp_steps", "Soft-start ramp [steps]", "Chamber inlet (blue)"),
     ("max_steps", "Max steps", "Run control"),
     ("viz_interval", "GUI update every N steps", "Run control"),
+    ("replay_px", "Replay record [px]", "Run control"),
 ]
 
 
@@ -480,6 +481,11 @@ class MainWindow(QMainWindow):
             "Walls stay on the uniform grid, so thrust/Isp are unchanged.\n"
             "The field view is shown across the true physical length, so the\n"
             "plume appears longer; the far field is coarser (bigger cells).")
+        self.cfg_panel.edits["replay_px"].setToolTip(
+            "Resolution of the recorded replay frames (longest side, px) —\n"
+            "this is what 'Export video MP4' encodes. 500 = light default;\n"
+            "set it to your grid width (e.g. 2000+) for native full-res\n"
+            "videos. Memory: ~2 bytes/cell x up to 400 frames.")
         self.cfg_panel.edits["outlet_relax"].setToolTip(
             "Subsonic pressure-outlet relaxation. 1 = hard pin to ambient\n"
             "(classic, used for all validation) — anchors back-pressure\n"
@@ -716,7 +722,12 @@ class MainWindow(QMainWindow):
         b_save = QPushButton("Save config…"); b_save.clicked.connect(self.save_config)
         b_loadc = QPushButton("Load config…"); b_loadc.clicked.connect(self.load_config)
         b_npz = QPushButton("Export NPZ…"); b_npz.clicked.connect(self.export_npz)
-        b_png = QPushButton("Export view PNG…"); b_png.clicked.connect(self.export_view)
+        b_png = QPushButton("Export field PNG…")
+        b_png.setToolTip(
+            "Save the current field as an image of the WHOLE simulation\n"
+            "domain at full grid resolution (1 cell = 1 pixel), using the\n"
+            "current colormap and color range — independent of zoom/window.")
+        b_png.clicked.connect(self.export_field)
         b_sweep = QPushButton("Altitude sweep…")
         b_sweep.setToolTip(
             "Batch-run this engine across a range of altitudes (ambient\n"
@@ -732,10 +743,18 @@ class MainWindow(QMainWindow):
         b_mp4 = QPushButton("Export video MP4…")
         b_mp4.setToolTip(
             "Encode the recorded replay frames (the field shown while the\n"
-            "solver ran) into an MP4 video.")
+            "solver ran) into an MP4 video at the resolution chosen to the\n"
+            "right. 'native' = the recorded grid resolution (see the\n"
+            "'Replay record [px]' field in Run control).")
         b_mp4.clicked.connect(self.export_mp4)
+        self.vidres_combo = QComboBox()
+        self.vidres_combo.addItems(["≤720p", "native", "2×", "4×"])
+        self.vidres_combo.setToolTip(
+            "MP4 output scale, applied to the recorded frames. Dimensions\n"
+            "are capped at 3840×2160 so the H.264 encoder stays happy.")
         for b in (b_save, b_loadc, b_npz, b_png, b_sweep, b_report, b_mp4):
             bb.addWidget(b)
+        bb.addWidget(self.vidres_combo)
         bb.addStretch(1)
 
         central = QWidget()
@@ -1128,7 +1147,11 @@ class MainWindow(QMainWindow):
         self._replay_count += 1
         if (self._replay_count - 1) % self._replay_stride != 0:
             return
-        ds = max(1, max(arr.shape) // 500)
+        try:
+            cap = max(100, int(float(self.cfg_panel.edits["replay_px"].text())))
+        except (ValueError, KeyError):
+            cap = 500
+        ds = max(1, max(arr.shape) // cap)
         self.replay_frames.append(
             (snap["meta"]["step"], name, arr[::ds, ::ds].astype(np.float16)))
         if len(self.replay_frames) > 400:
@@ -1420,11 +1443,50 @@ class MainWindow(QMainWindow):
             self.worker.export_npz(path)
             self.worker.running = was
 
-    def export_view(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export view", "view.png", "PNG (*.png)")
-        if path:
-            from pyqtgraph.exporters import ImageExporter
-            ImageExporter(self.glw.scene()).export(path)
+    def export_field(self):
+        """Full-resolution image of the whole sim domain: 1 cell = 1 pixel,
+        current field / colormap / color range, independent of the window."""
+        if not self.last_snap:
+            QMessageBox.information(self, "Tachyon CFD",
+                                    "Initialize and run the solver first.")
+            return
+        name = self.field_combo.currentText()
+        arr = self.last_snap["fields"].get(name)
+        if arr is None:
+            return
+        fname = name.split(" [")[0].lower().replace(" ", "_")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export field image", f"{fname}.png", "PNG (*.png)")
+        if not path:
+            return
+        if self.auto_chk.isChecked():
+            fin = np.isfinite(arr)
+            lo = float(arr[fin].min()) if fin.any() else 0.0
+            hi = float(arr[fin].max()) if fin.any() else 1.0
+        else:
+            try:
+                lo = float(self.lvl_min.text()); hi = float(self.lvl_max.text())
+            except ValueError:
+                lo, hi = 0.0, 1.0
+        if hi <= lo:
+            hi = lo + 1e-12
+        sel = self.cmap_combo.currentText()
+        cmap = get_cmap({"RdYlBu": "RdYlBu_r",
+                         "Spectral": "Spectral_r"}.get(sel, sel))
+        lut = cmap.getLookupTable(0.0, 1.0, 256)[:, :3].astype(np.uint8)
+        disp = arr
+        if self._disp_idx is not None:            # stretched: physical extent
+            disp = disp[:, self._disp_idx]
+        walls = ~np.isfinite(disp)
+        idx = ((np.nan_to_num(disp, nan=lo, posinf=hi, neginf=lo) - lo)
+               * (255.0 / (hi - lo))).clip(0, 255)
+        rgb = lut[idx.astype(np.uint8)]
+        rgb[walls] = (255, 255, 255)              # walls render white
+        from PIL import Image
+        Image.fromarray(rgb).save(path)
+        self.statusBar().showMessage(
+            f"Field image saved ({rgb.shape[1]}×{rgb.shape[0]} px, "
+            f"range {lo:g}…{hi:g}): {path}", 10000)
 
     # ------------------------------------------------- sweep / report / video
     def open_sweep(self):
@@ -1505,16 +1567,33 @@ class MainWindow(QMainWindow):
             if not math.isfinite(lo) or hi <= lo:
                 lo, hi = 0.0, 1.0
             with imageio.get_writer(path, fps=fps, codec="libx264",
-                                    quality=8, macro_block_size=1) as wr:
+                                    quality=8, macro_block_size=1,
+                                    output_params=["-preset", "veryfast",
+                                                   "-threads", "0"]) as wr:
+                # output scale from the bottom-bar combo; cap the encoded
+                # frame at 3840x2160 (long low domains used to blow past
+                # H.264 limits when the upscale keyed on height alone)
+                h0, w0 = frames[0][2].shape
+                mode = self.vidres_combo.currentIndex()
+                if mode == 0:                      # <=720p (classic)
+                    k = max(1, 720 // max(h0, 1))
+                else:                              # native / 2x / 4x
+                    k = (1, 1, 2, 4)[mode]
+                while k > 1 and (w0 * k > 3840 or h0 * k > 2160):
+                    k -= 1
+                # frames still over 4K at k=1 (huge native recordings):
+                # stride-downsample instead of cropping the plume tail off
+                ds2 = max(1, int(math.ceil(max(w0 / 3840.0, h0 / 2160.0))))
                 for step, fname, a16 in frames:
                     a = a16.astype(np.float32)
                     a = np.nan_to_num(a, nan=lo, posinf=hi, neginf=lo)
                     idx = ((a - lo) * (255.0 / (hi - lo))).clip(0, 255)
                     rgb = lut[idx.astype(np.uint8)]
-                    # upscale small fields so players cope better; even dims
-                    k = max(1, 720 // max(rgb.shape[0], 1))
                     if k > 1:
                         rgb = rgb.repeat(k, axis=0).repeat(k, axis=1)
+                    elif ds2 > 1:
+                        rgb = rgb[::ds2, ::ds2]
+                    # H.264 needs even dimensions
                     if rgb.shape[0] % 2:
                         rgb = rgb[:-1]
                     if rgb.shape[1] % 2:

@@ -240,10 +240,10 @@ When to stop and how often to refresh.
 |--------|--------------|
 | **Save config… / Load config…** | Write/read all panel settings as JSON. |
 | **Export NPZ…** | Save the raw field arrays (density, velocity, p, T, Mach, …) for offline analysis. |
-| **Export view PNG…** | Save the current field view as an image. |
+| **Export field PNG…** | Save the current field as an image of the **whole simulation domain at full grid resolution** (1 cell = 1 pixel), with the current colormap and color range — independent of zoom or window size. Walls render white. |
 | **Altitude sweep…** | Re-run the converged engine across a range of ambient pressures and plot thrust & Isp vs altitude (great for nozzle/aerospike comparisons). |
 | **Report PDF…** | Multi-page PDF: geometry, fields, performance, convergence and a Bartz heat-flux cross-check. |
-| **Export video MP4…** | Render the recorded run history to an MP4. |
+| **Export video MP4…** | Render the recorded run history to an MP4 at the scale chosen in the combo next to it (≤720p / native / 2× / 4×; capped at 3840×2160). The *recording* resolution is set by **Replay record [px]** in Run control — raise it to your grid width **before** the run for native full-res videos. |
 
 ---
 
