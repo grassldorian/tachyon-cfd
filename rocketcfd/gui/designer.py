@@ -146,6 +146,17 @@ class DesignerTab(QWidget):
         self.inlet_chk.setChecked(True)
         self.inlet_chk.toggled.connect(self._schedule)
         mf.addRow(self.inlet_chk)
+        self.enclose_chk = QCheckBox("Solid fill around engine")
+        self.enclose_chk.setChecked(True)
+        self.enclose_chk.toggled.connect(self._schedule)
+        self.enclose_chk.setToolTip(
+            "Fill everything beside and behind the engine (up to the exit\n"
+            "plane) with wall. The ambient pocket around the engine body is\n"
+            "a resonating cavity — startup blasts and pressure waves bounce\n"
+            "between the engine and the domain edges. Filling it leaves only\n"
+            "chamber + plume fluid (also fewer cells = faster). Untick for a\n"
+            "free-standing engine with external flow around it.")
+        mf.addRow(self.enclose_chk)
         self.inlet_edit = StepLineEdit("75", step=1.0, minimum=5.0, decimals=0)
         self.inlet_edit.textChanged.connect(self._schedule)
         self.inlet_edit.setToolTip("Blue inlet diameter as a percent of the "
@@ -223,7 +234,8 @@ class DesignerTab(QWidget):
         rgb, info = ed.rasterize_mask(
             geom, nozzle, engine_px=res, plume_factor=plume,
             margin_factor=margin,
-            add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac)
+            add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
+            enclose=self.enclose_chk.isChecked())
         self._rgb, self._info = rgb, info
 
         self._show_preview(rgb)
@@ -293,7 +305,7 @@ class DesignerTab(QWidget):
                 geom, self._nozzle(), engine_px=res, plume_factor=plume,
                 margin_factor=margin,
                 add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
-                analytic=True)
+                enclose=self.enclose_chk.isChecked(), analytic=True)
             self._rgb, self._info = rgb, info
         except ValueError:
             rgb, info = self._rgb, self._info      # keep the last valid mask

@@ -304,6 +304,12 @@ then hands it to the solver.
   above/below the engine (as a multiple of its biggest radius — raise it to
   1–3 for high-altitude plumes that balloon radially), and the **pressure
   inlet** is placed on the injector face at the chosen *Inlet Ø [% chamber]*.
+  **Solid fill around engine** (default on) fills everything beside and
+  behind the engine with wall up to the exit plane: the ambient pocket around
+  the engine body is a resonating cavity where startup blasts and pressure
+  waves bounce between the engine and the domain edges — filling it leaves
+  only chamber + plume fluid (and runs faster). Untick it for a free-standing
+  engine with external flow.
 - **Send to solver →** rasterizes the geometry to a Tachyon mask (black walls,
   white flow, blue inlet, red outlet) **plus an exact analytic level set**: the
   cut-cell wall surface is built from the true signed distance to the Rao/cone

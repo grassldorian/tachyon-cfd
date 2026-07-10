@@ -240,7 +240,8 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    engine_px: int = 620, plume_factor: float = 1.6,
                    margin_factor: float = 0.30,
                    wall_mm: float | None = None, add_inlet: bool = True,
-                   inlet_frac: float = 0.75, analytic: bool = False):
+                   inlet_frac: float = 0.75, analytic: bool = False,
+                   enclose: bool = True):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
 
     Returns (rgb uint8 array (H, W, 3), info dict). ``info`` carries
@@ -286,18 +287,29 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     img = Image.new("RGB", (W * SS, H * SS), FLOW)
     d = ImageDraw.Draw(img)
 
-    # upper + lower nozzle walls (band between the bore contour and contour+wall)
-    for sgn in (+1, -1):
-        inner = [px(xx, sgn * rr) for xx, rr in zip(x, r)]
-        outer = [px(xx, sgn * (rr + wall_mm)) for xx, rr in zip(x, r)][::-1]
-        d.polygon(inner + outer, fill=WALL)
-
-    # injector face: solid plate that IS part of the engine — spans the full
-    # chamber diameter (+ walls) and sits at x in [-face_mm, 0] so the chamber
-    # volume is untouched and the plate merges with the wall bands at x = 0.
-    fx0, fy0 = px(-face_mm, rc + wall_mm)
-    fx1, fy1 = px(0.0, -(rc + wall_mm))
-    d.rectangle([fx0, fy0, fx1, fy1], fill=WALL)
+    if enclose:
+        # solid block everywhere beside/behind the engine, up to the exit
+        # plane: the ambient pocket around the engine body is a resonating
+        # cavity (startup blasts and acoustics ricochet between the engine
+        # and the farfield edges); filling it leaves only bore + plume fluid.
+        bx1, _ = px(L, 0.0)
+        d.rectangle([0, 0, bx1, H * SS - 1], fill=WALL)
+        # carve the bore (flow path) back out of the block
+        bore = ([px(xx, rr) for xx, rr in zip(x, r)]
+                + [px(xx, -rr) for xx, rr in zip(x, r)][::-1])
+        d.polygon(bore, fill=FLOW)
+    else:
+        # free-standing engine: wall bands around the bore + injector plate
+        for sgn in (+1, -1):
+            inner = [px(xx, sgn * rr) for xx, rr in zip(x, r)]
+            outer = [px(xx, sgn * (rr + wall_mm)) for xx, rr in zip(x, r)][::-1]
+            d.polygon(inner + outer, fill=WALL)
+        # injector face: solid plate that IS part of the engine — spans the
+        # full chamber diameter (+ walls) at x in [-face_mm, 0] so the chamber
+        # volume is untouched and the plate merges with the wall bands at x=0.
+        fx0, fy0 = px(-face_mm, rc + wall_mm)
+        fx1, fy1 = px(0.0, -(rc + wall_mm))
+        d.rectangle([fx0, fy0, fx1, fy1], fill=WALL)
 
     # pressure inlet: blue opening set INTO the face plate, on the chamber
     # side only — the outer half of the plate stays black, so the inlet feeds
@@ -331,18 +343,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
         Xn, Yn = np.meshgrid(np.arange(W + 1, dtype=np.float64),
                              np.arange(H + 1, dtype=np.float64))
         xs_px = fx(x)                              # bore contour in px
-        band_polys = []
-        for sgn in (+1, -1):
-            bore = np.column_stack([xs_px, fy(sgn * r)])
-            outer = np.column_stack([xs_px, fy(sgn * (r + wall_mm))])[::-1]
-            band_polys.append(np.vstack([bore, outer]))
-        face = np.array([[fx(-face_mm), fy(rc + wall_mm)],
-                         [fx(0.0),      fy(rc + wall_mm)],
-                         [fx(0.0),      fy(-(rc + wall_mm))],
-                         [fx(-face_mm), fy(-(rc + wall_mm))]])
-        sdf = np.minimum(_polygon_sdf(Xn, Yn, band_polys[0]),
-                         _polygon_sdf(Xn, Yn, band_polys[1]))
-        sdf_face = _polygon_sdf(Xn, Yn, face)
+        sdf_inlet = None
         if add_inlet:
             ir = max(inlet_frac, 0.05) * rc
             # extend a hair past x=0 so the recess opens cleanly into the
@@ -351,7 +352,34 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                               [fx(0.0) + 0.75,     fy(ir)],
                               [fx(0.0) + 0.75,     fy(-ir)],
                               [fx(-0.5 * face_mm), fy(-ir)]])
-            sdf_face = np.maximum(sdf_face, -_polygon_sdf(Xn, Yn, inlet))
-        sdf = np.minimum(sdf, sdf_face)
+            sdf_inlet = _polygon_sdf(Xn, Yn, inlet)
+        if enclose:
+            # solid = block (up to the exit plane) minus bore minus inlet
+            block = np.array([[-50.0,   -50.0],
+                              [fx(L),   -50.0],
+                              [fx(L),   H + 50.0],
+                              [-50.0,   H + 50.0]])
+            bore = np.vstack([np.column_stack([xs_px, fy(r)]),
+                              np.column_stack([xs_px, fy(-r)])[::-1]])
+            sdf = np.maximum(_polygon_sdf(Xn, Yn, block),
+                             -_polygon_sdf(Xn, Yn, bore))
+            if sdf_inlet is not None:
+                sdf = np.maximum(sdf, -sdf_inlet)
+        else:
+            band_polys = []
+            for sgn in (+1, -1):
+                bore = np.column_stack([xs_px, fy(sgn * r)])
+                outer = np.column_stack([xs_px, fy(sgn * (r + wall_mm))])[::-1]
+                band_polys.append(np.vstack([bore, outer]))
+            face = np.array([[fx(-face_mm), fy(rc + wall_mm)],
+                             [fx(0.0),      fy(rc + wall_mm)],
+                             [fx(0.0),      fy(-(rc + wall_mm))],
+                             [fx(-face_mm), fy(-(rc + wall_mm))]])
+            sdf = np.minimum(_polygon_sdf(Xn, Yn, band_polys[0]),
+                             _polygon_sdf(Xn, Yn, band_polys[1]))
+            sdf_face = _polygon_sdf(Xn, Yn, face)
+            if sdf_inlet is not None:
+                sdf_face = np.maximum(sdf_face, -sdf_inlet)
+            sdf = np.minimum(sdf, sdf_face)
         info["node_phi"] = sdf.astype(np.float32)   # phi > 0 in fluid
     return rgb, info
