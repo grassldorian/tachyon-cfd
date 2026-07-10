@@ -142,6 +142,14 @@ class DesignerTab(QWidget):
             "biggest engine radius. Increase (e.g. 1–3) to give high-altitude\n"
             "plumes room to balloon radially; more cells = slower.")
         mf.addRow("Radial margin ×", self.margin_edit)
+        self.expand_edit = StepLineEdit("0", step=1.0, minimum=0.0, decimals=0)
+        self.expand_edit.textChanged.connect(self._schedule)
+        self.expand_edit.setToolTip(
+            "Expanding wall section (altitude-cell / diffuser): downstream of\n"
+            "the nozzle exit the plume flows into a diverging duct whose walls\n"
+            "flare out at this half-angle (deg) from the exit lip, instead of\n"
+            "a parallel channel. 0 = off (straight plume box). Try 5–15°.")
+        mf.addRow("Expanding wall [°]", self.expand_edit)
         self.inlet_chk = QCheckBox("Pressure inlet at injector face")
         self.inlet_chk.setChecked(True)
         self.inlet_chk.toggled.connect(self._schedule)
@@ -224,6 +232,7 @@ class DesignerTab(QWidget):
             res = max(120, int(float(self.res_edit.text())))
             plume = max(0.2, float(self.plume_edit.text()))
             margin = max(0.05, float(self.margin_edit.text()))
+            expand = max(0.0, min(60.0, float(self.expand_edit.text())))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             pc = float(self.pc_edit.text()) * 1e5
             pa = ed.ambient_pressure(float(self.alt_edit.text()))
@@ -247,7 +256,7 @@ class DesignerTab(QWidget):
             margin_factor=margin,
             add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
             enclose=self.enclose_chk.isChecked(),
-            half=self.half_chk.isChecked())
+            half=self.half_chk.isChecked(), expand_deg=expand)
         self._rgb, self._info = rgb, info
 
         self._show_preview(rgb)
@@ -312,13 +321,15 @@ class DesignerTab(QWidget):
             res = max(120, int(float(self.res_edit.text())))
             plume = max(0.2, float(self.plume_edit.text()))
             margin = max(0.05, float(self.margin_edit.text()))
+            expand = max(0.0, min(60.0, float(self.expand_edit.text())))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             rgb, info = ed.rasterize_mask(
                 geom, self._nozzle(), engine_px=res, plume_factor=plume,
                 margin_factor=margin,
                 add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
                 enclose=self.enclose_chk.isChecked(),
-                half=self.half_chk.isChecked(), analytic=True)
+                half=self.half_chk.isChecked(), expand_deg=expand,
+                analytic=True)
             self._rgb, self._info = rgb, info
         except ValueError:
             rgb, info = self._rgb, self._info      # keep the last valid mask

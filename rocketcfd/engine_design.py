@@ -241,7 +241,8 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    margin_factor: float = 0.30,
                    wall_mm: float | None = None, add_inlet: bool = True,
                    inlet_frac: float = 0.75, analytic: bool = False,
-                   enclose: bool = True, half: bool = False):
+                   enclose: bool = True, half: bool = False,
+                   expand_deg: float = 0.0):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
 
     Returns (rgb uint8 array (H, W, 3), info dict). ``info`` carries
@@ -324,6 +325,22 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     rw = max(2, int(round(0.004 * W)))
     d.rectangle([(W - rw) * SS, 0, W * SS - 1, H * SS - 1], fill=OUTLET)
 
+    # expanding wall section (altitude-cell / diffuser): downstream of the exit
+    # the plume flows into a diverging duct instead of a parallel channel — the
+    # walls flare out at ``expand_deg`` from the nozzle-exit lip. Drawn AFTER
+    # the outlet so the solid wedges trim the red strip back to the duct mouth.
+    if expand_deg > 0.0:
+        slope = math.tan(math.radians(min(expand_deg, 60.0)))
+        x_end = W / px_per_mm - x_off              # right edge in engine mm
+        r0 = re + wall_mm                          # duct mouth at the exit lip
+        Rf = rmax + wall_mm + margin_r + 20.0      # beyond the domain edge
+        for sgn in (+1, -1):
+            wedge = [px(L, sgn * r0),
+                     px(x_end + 20.0, sgn * (r0 + slope * (x_end + 20.0 - L))),
+                     px(x_end + 20.0, sgn * Rf),
+                     px(L, sgn * Rf)]
+            d.polygon(wedge, fill=WALL)
+
     img = img.resize((W, H), Image.Resampling.BOX)  # -> coverage grays
     rgb = np.asarray(img, dtype=np.uint8)
     if half:
@@ -387,6 +404,19 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
             if sdf_inlet is not None:
                 sdf_face = np.maximum(sdf_face, -sdf_inlet)
             sdf = np.minimum(sdf, sdf_face)
+        if expand_deg > 0.0:
+            # add the two diverging duct walls to the solid (union -> minimum)
+            slope = math.tan(math.radians(min(expand_deg, 60.0)))
+            x_end = W / px_per_mm - x_off
+            r0 = re + wall_mm
+            Rf = rmax + wall_mm + margin_r + 20.0
+            re2 = r0 + slope * (x_end + 20.0 - L)
+            for sgn in (+1, -1):
+                wedge = np.array([[fx(L),          fy(sgn * r0)],
+                                  [fx(x_end + 20), fy(sgn * re2)],
+                                  [fx(x_end + 20), fy(sgn * Rf)],
+                                  [fx(L),          fy(sgn * Rf)]])
+                sdf = np.minimum(sdf, _polygon_sdf(Xn, Yn, wedge))
         if half:
             sdf = np.ascontiguousarray(sdf[:H // 2 + 1])
         info["node_phi"] = sdf.astype(np.float32)   # phi > 0 in fluid
