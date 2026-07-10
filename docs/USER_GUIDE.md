@@ -255,7 +255,12 @@ When to stop and how often to refresh.
 
 - **Field selector** — choose what to color by (Mach, pressure, temperature,
   density, velocity, wall heat flux, and—if two-gamma is on—mixture fraction /
-  local gamma).
+  local gamma). Two **synthetic optical** fields render like a test-stand
+  photo (always grayscale, engine body black, independent of the colormap):
+  - *Schlieren* — computed knife-edge schlieren `exp(-k·|∇ρ|)`: white where
+    the flow is smooth, dark along shocks and shear layers.
+  - *Shadowgraph* — the density Laplacian `∇²ρ`: each shock appears as a
+    dark/bright fringe pair, exactly like a real shadowgraph.
 - **Colormap** — includes **SpaceX** (the default): a diverging
   blue→cyan→white→orange→deep-red map hand-matched to the palette in SpaceX's
   in-house nozzle-flow renders, plus twilight, turbo, viridis, and the rest.

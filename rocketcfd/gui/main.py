@@ -49,6 +49,11 @@ def _spacex_cmap() -> pg.ColorMap:
     return pg.ColorMap(pos, col)
 
 
+# photographic grayscale fields: pre-mapped to 0..1, always shown in gray so
+# they read like a real schlieren/shadowgraph photo regardless of the colormap
+GRAY_FIELDS = ("Schlieren", "Shadowgraph")
+
+
 def get_cmap(name: str) -> pg.ColorMap:
     if name.lower().replace(" ", "") == "spacex":
         return _spacex_cmap()
@@ -557,6 +562,7 @@ class MainWindow(QMainWindow):
             "Velocity |V| [m/s]", "Velocity u [m/s]", "Velocity v [m/s]",
             "Turb. kinetic energy k [m^2/s^2]", "Specific dissipation omega [1/s]",
             "Eddy viscosity ratio mu_t/mu [-]", "Schlieren |grad rho|",
+            "Schlieren", "Shadowgraph",
             "Wall heat flux [W/m^2]",
             "Mixture fraction [-]", "Local gamma [-]",
         ])
@@ -1372,21 +1378,26 @@ class MainWindow(QMainWindow):
         if arr is None:
             return
         rect = self.world_rect
-        if self.auto_chk.isChecked():
-            lo = float(np.nanmin(arr)) if np.isfinite(arr).any() else 0.0
-            hi = float(np.nanmax(arr)) if np.isfinite(arr).any() else 1.0
-            if hi <= lo:
-                hi = lo + 1e-12
-            self.lvl_min.setText(f"{lo:g}")
-            self.lvl_max.setText(f"{hi:g}")
+        if name in GRAY_FIELDS:                  # photographic: fixed 0..1 gray
+            lo, hi = 0.0, 1.0
+            self.lvl_min.setText("0"); self.lvl_max.setText("1")
+            cmap = get_cmap("gray")
         else:
-            try:
-                lo = float(self.lvl_min.text()); hi = float(self.lvl_max.text())
-            except ValueError:
-                lo, hi = 0.0, 1.0
-        sel = self.cmap_combo.currentText()
-        cmap = get_cmap({"RdYlBu": "RdYlBu_r",
-                         "Spectral": "Spectral_r"}.get(sel, sel))
+            if self.auto_chk.isChecked():
+                lo = float(np.nanmin(arr)) if np.isfinite(arr).any() else 0.0
+                hi = float(np.nanmax(arr)) if np.isfinite(arr).any() else 1.0
+                if hi <= lo:
+                    hi = lo + 1e-12
+                self.lvl_min.setText(f"{lo:g}")
+                self.lvl_max.setText(f"{hi:g}")
+            else:
+                try:
+                    lo = float(self.lvl_min.text()); hi = float(self.lvl_max.text())
+                except ValueError:
+                    lo, hi = 0.0, 1.0
+            sel = self.cmap_combo.currentText()
+            cmap = get_cmap({"RdYlBu": "RdYlBu_r",
+                             "Spectral": "Spectral_r"}.get(sel, sel))
         disp = np.nan_to_num(arr, nan=lo)
         if self._disp_idx is not None:          # remap to physical x extent
             disp = disp[:, self._disp_idx]
@@ -1507,7 +1518,10 @@ class MainWindow(QMainWindow):
             self, "Export field image", f"{fname}.png", "PNG (*.png)")
         if not path:
             return
-        if self.auto_chk.isChecked():
+        gray = name in GRAY_FIELDS               # photographic schlieren view
+        if gray:
+            lo, hi = 0.0, 1.0
+        elif self.auto_chk.isChecked():
             fin = np.isfinite(arr)
             lo = float(arr[fin].min()) if fin.any() else 0.0
             hi = float(arr[fin].max()) if fin.any() else 1.0
@@ -1519,7 +1533,8 @@ class MainWindow(QMainWindow):
         if hi <= lo:
             hi = lo + 1e-12
         sel = self.cmap_combo.currentText()
-        cmap = get_cmap({"RdYlBu": "RdYlBu_r",
+        cmap = get_cmap("gray" if gray else
+                        {"RdYlBu": "RdYlBu_r",
                          "Spectral": "Spectral_r"}.get(sel, sel))
         lut = cmap.getLookupTable(0.0, 1.0, 256)[:, :3].astype(np.uint8)
         disp = arr
@@ -1529,7 +1544,8 @@ class MainWindow(QMainWindow):
         idx = ((np.nan_to_num(disp, nan=lo, posinf=hi, neginf=lo) - lo)
                * (255.0 / (hi - lo))).clip(0, 255)
         rgb = lut[idx.astype(np.uint8)]
-        rgb[walls] = self._wall_rgb()             # toolbar wall color
+        # schlieren/shadowgraph: the model reads black against the light field
+        rgb[walls] = (0, 0, 0) if gray else self._wall_rgb()
         from PIL import Image
         Image.fromarray(rgb).save(path)
         self.statusBar().showMessage(

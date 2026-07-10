@@ -224,6 +224,25 @@ class GPUSolver:
         schlieren = np.sqrt(gx * gx + gy * gy)
 
         fluid = self.fluid_np[2:-2, 2:-2]
+
+        # ---- synthetic schlieren / shadowgraph (photographic, 0..1 grayscale) ----
+        # Computed schlieren S = exp(-k |grad rho| / ref): white where the flow
+        # is smooth, dark along shocks/shear layers — the classic test-stand
+        # knife-edge look. Shadowgraph uses the density Laplacian (grad^2 rho),
+        # which renders each shock as a dark/bright fringe pair.
+        if fluid.any():
+            gref = float(np.percentile(schlieren[fluid], 99)) or 1.0
+        else:
+            gref = 1.0
+        schlieren_img = np.exp(-3.0 * schlieren / max(gref, 1e-12))
+        _, gxx = np.gradient(gx, self.mask.dx, self.x_centers)   # d2rho/dx2
+        gyy, _ = np.gradient(gy, self.mask.dx, self.x_centers)   # d2rho/dy2
+        lap = gxx + gyy
+        if fluid.any():
+            lref = float(np.percentile(np.abs(lap[fluid]), 99)) or 1.0
+        else:
+            lref = 1.0
+        shadow_img = np.clip(0.5 + 0.5 * lap / max(lref, 1e-12), 0.0, 1.0)
         fields = {
             "Mach": mach, "Pressure [Pa]": p, "Temperature [K]": T,
             "Density [kg/m^3]": rho, "Velocity |V| [m/s]": vel,
@@ -231,6 +250,8 @@ class GPUSolver:
             "Turb. kinetic energy k [m^2/s^2]": k, "Specific dissipation omega [1/s]": w,
             "Eddy viscosity ratio mu_t/mu [-]": mut / np.maximum(mul, 1e-12),
             "Schlieren |grad rho|": schlieren,
+            "Schlieren": schlieren_img.astype(np.float32),
+            "Shadowgraph": shadow_img.astype(np.float32),
         }
         if getattr(cfg, "wall_T", 0.0) > 0.0 and cfg.wall_type == "noslip":
             fields["Wall heat flux [W/m^2]"] = cp.asnumpy(self.qw[2:-2, 2:-2])
