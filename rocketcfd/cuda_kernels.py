@@ -291,7 +291,6 @@ __device__ __forceinline__ float weno5(float m2, float m1, float c0,
     float wi = 1.0f / (w0 + w1 + w2);
     return (w0*q0 + w1*q1 + w2*q2) * wi;
 }
-
 #endif
 
 #if CARBFIX

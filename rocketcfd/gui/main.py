@@ -247,9 +247,9 @@ class ConfigPanel(QWidget):
             "5th WENO — far lower dissipation; shock diamonds and shear\n"
             "layers survive much further downstream. Runs in the interior\n"
             "and falls back to MUSCL next to walls; slower per step.\n"
-            "(TENO5 and WENO-Z were evaluated and rejected: TENO's zero\n"
-            "background dissipation is unstable in this float32 solver,\n"
-            "WENO-Z measured identical to WENO here — see docs/REALISM.md.)")
+            "(TENO5, WENO-Z and WENO9 were evaluated and rejected: TENO and\n"
+            "WENO9 are unstable with this solver's float32 + RK2 core, and\n"
+            "WENO-Z measured identical to WENO — see docs/REALISM.md.)")
         num.addRow("Spatial order", self.order_combo)
         self.limiter_combo = QComboBox()
         self.limiter_combo.addItems(["minmod", "van Albada", "van Leer",
