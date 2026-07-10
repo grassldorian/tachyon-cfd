@@ -145,7 +145,13 @@ def performance(p: np.ndarray, rho: np.ndarray, u: np.ndarray, v: np.ndarray,
     if axisymmetric and axis_center:
         Fx *= 0.5; Fy *= 0.5; mdot *= 0.5       # drawing contains both halves
 
-    F = float(np.hypot(Fx, Fy))
+    if axisymmetric:
+        # axial thrust only: the radial component cancels over the revolution
+        # (and in a half-domain drawing there is no mirror half to cancel it
+        # numerically — hypot would report the huge one-sided radial force)
+        F = float(abs(Fx))
+    else:
+        F = float(np.hypot(Fx, Fy))
     # Isp / c_eff need an established (choked) mass flow. During fill/acoustic
     # transients mdot can be a hair above zero and divide F into a nonphysical
     # value, so gate on a generous chemical-rocket ceiling: c_eff is intensive

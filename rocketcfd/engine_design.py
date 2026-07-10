@@ -241,7 +241,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    margin_factor: float = 0.30,
                    wall_mm: float | None = None, add_inlet: bool = True,
                    inlet_frac: float = 0.75, analytic: bool = False,
-                   enclose: bool = True):
+                   enclose: bool = True, half: bool = False):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
 
     Returns (rgb uint8 array (H, W, 3), info dict). ``info`` carries
@@ -326,10 +326,16 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
 
     img = img.resize((W, H), Image.Resampling.BOX)  # -> coverage grays
     rgb = np.asarray(img, dtype=np.uint8)
+    if half:
+        # upper half only, axis along the bottom image edge (a symmetry plane
+        # in the solver): exact mirror symmetry by construction + 2x fewer
+        # cells. The full-section render is simply cropped at the axis row.
+        rgb = np.ascontiguousarray(rgb[:H // 2])
     info = dict(meters_per_pixel=1.0e-3 / px_per_mm,
-                px_per_mm=px_per_mm, nx=W, ny=H,
+                px_per_mm=px_per_mm, nx=W, ny=rgb.shape[0],
                 throat_px=2.0 * rt * px_per_mm,
-                exit_px=2.0 * re * px_per_mm)
+                exit_px=2.0 * re * px_per_mm,
+                axis_location="bottom" if half else "center")
 
     if analytic:
         # ---- exact node level set from the analytic contour ----
@@ -381,5 +387,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
             if sdf_inlet is not None:
                 sdf_face = np.maximum(sdf_face, -sdf_inlet)
             sdf = np.minimum(sdf, sdf_face)
+        if half:
+            sdf = np.ascontiguousarray(sdf[:H // 2 + 1])
         info["node_phi"] = sdf.astype(np.float32)   # phi > 0 in fluid
     return rgb, info

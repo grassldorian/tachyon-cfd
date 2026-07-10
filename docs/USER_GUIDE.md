@@ -319,7 +319,13 @@ then hands it to the solver.
   the engine body is a resonating cavity where startup blasts and pressure
   waves bounce between the engine and the domain edges — filling it leaves
   only chamber + plume fluid (and runs faster). Untick it for a free-standing
-  engine with external flow.
+  engine with external flow. **Half domain (axis on edge)** simulates only the
+  upper half with the symmetry axis along the domain edge: results are
+  *exactly* mirror-symmetric by construction and the run is ~2× faster. (In
+  full-section mode the two halves are computed independently, so unsteady
+  plumes slowly de-synchronize from float rounding — visible asymmetry on
+  chaotic runs. Measured: the asymmetry starts at ~10⁻⁷ and only grows through
+  chaotic amplification; it is not a solver bias.)
 - **Send to solver →** rasterizes the geometry to a Tachyon mask (black walls,
   white flow, blue inlet, red outlet) **plus an exact analytic level set**: the
   cut-cell wall surface is built from the true signed distance to the Rao/cone

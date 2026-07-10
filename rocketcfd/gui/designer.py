@@ -146,6 +146,17 @@ class DesignerTab(QWidget):
         self.inlet_chk.setChecked(True)
         self.inlet_chk.toggled.connect(self._schedule)
         mf.addRow(self.inlet_chk)
+        self.half_chk = QCheckBox("Half domain (axis on edge)")
+        self.half_chk.setChecked(False)
+        self.half_chk.toggled.connect(self._schedule)
+        self.half_chk.setToolTip(
+            "Simulate only the upper half of the engine with the symmetry\n"
+            "axis along the domain edge: results are EXACTLY mirror-\n"
+            "symmetric by construction and the run is ~2x faster (half the\n"
+            "cells). In full-section mode the two halves are computed\n"
+            "independently, so unsteady plumes slowly de-synchronize at\n"
+            "rounding level — visible asymmetry on chaotic runs.")
+        mf.addRow(self.half_chk)
         self.enclose_chk = QCheckBox("Solid fill around engine")
         self.enclose_chk.setChecked(True)
         self.enclose_chk.toggled.connect(self._schedule)
@@ -235,7 +246,8 @@ class DesignerTab(QWidget):
             geom, nozzle, engine_px=res, plume_factor=plume,
             margin_factor=margin,
             add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
-            enclose=self.enclose_chk.isChecked())
+            enclose=self.enclose_chk.isChecked(),
+            half=self.half_chk.isChecked())
         self._rgb, self._info = rgb, info
 
         self._show_preview(rgb)
@@ -305,7 +317,8 @@ class DesignerTab(QWidget):
                 geom, self._nozzle(), engine_px=res, plume_factor=plume,
                 margin_factor=margin,
                 add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
-                enclose=self.enclose_chk.isChecked(), analytic=True)
+                enclose=self.enclose_chk.isChecked(),
+                half=self.half_chk.isChecked(), analytic=True)
             self._rgb, self._info = rgb, info
         except ValueError:
             rgb, info = self._rgb, self._info      # keep the last valid mask
@@ -318,7 +331,8 @@ class DesignerTab(QWidget):
             pc = 2.0e6
         meta = dict(
             meters_per_pixel=info["meters_per_pixel"],
-            axisymmetric=True, axis_location="center",
+            axisymmetric=True,
+            axis_location=info.get("axis_location", "center"),
             gamma=prop["gamma"], R_gas=ed.R_UNIVERSAL / prop["M"],
             inlet_T0=prop["Tc"], inlet_p0=pc,
         )
