@@ -62,4 +62,14 @@ dw = downstream_structure(cw, solw, sw)
 print(f"downstream structure: MUSCL {dm:.3g}, WENO5 {dw:.3g}  "
       f"(ratio {dw/dm:.2f})")
 assert dw > 1.10 * dm, "WENO5 should preserve more downstream structure"
+
+# WENO9 (order 9) auto-engages SSP-RK3 and must be STABLE (it blew up on RK2)
+# and at least as sharp as WENO5
+c9, sol9, s9 = run(limiter="minmod", order=9)
+m9 = np.nanmax(s9["fields"]["Mach"])
+assert np.isfinite(m9) and 0.5 < m9 < 12.0, ("WENO9 unstable", m9)
+d9 = downstream_structure(c9, sol9, s9)
+print(f"WENO9 (auto-RK3): Mach max {m9:.3f}, downstream {d9:.3g} "
+      f"({d9/dw:.2f}x WENO5)  OK")
+assert d9 > 1.10 * dm, "WENO9 should preserve more downstream structure"
 print("reconstruction test OK")

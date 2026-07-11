@@ -168,10 +168,15 @@ class GPUSolver:
         self.residual = 1.0
 
     def step(self, n: int = 1):
-        """Advance n SSP-RK2 steps."""
+        """Advance n SSP-RK time steps (2- or 3-stage)."""
         cp = self.cp
         t_start = time.perf_counter()
         self._dt_global = 0.0
+        # SSP-RK3 is required for WENO9 stability and better for time-accurate
+        # unsteady runs; the rk_combine kernel is coefficient-generic so RK3 is
+        # just a third Shu-Osher stage. dt is frozen at stage 1 (compute_dt).
+        rk3 = (getattr(self.cfg, "time_order", 2) >= 3
+               or self.cfg.muscl_order >= 9)
         for _ in range(n):
             cp.copyto(self.U0, self.U)
             if self.two_gamma:
@@ -180,10 +185,20 @@ class GPUSolver:
             self._combine(1.0, 0.0, 1.0)
             if self.two_gamma:
                 self._scalar(1.0, 0.0, 1.0)
-            self._rhs(compute_dt=False)
-            self._combine(0.5, 0.5, 0.5)
-            if self.two_gamma:
-                self._scalar(0.5, 0.5, 0.5)
+            if rk3:
+                self._rhs(compute_dt=False)
+                self._combine(0.75, 0.25, 0.25)
+                if self.two_gamma:
+                    self._scalar(0.75, 0.25, 0.25)
+                self._rhs(compute_dt=False)
+                self._combine(1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0)
+                if self.two_gamma:
+                    self._scalar(1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0)
+            else:
+                self._rhs(compute_dt=False)
+                self._combine(0.5, 0.5, 0.5)
+                if self.two_gamma:
+                    self._scalar(0.5, 0.5, 0.5)
             self.step_count += 1
             if not self.cfg.local_dt:
                 self.sim_time += self._dt_global

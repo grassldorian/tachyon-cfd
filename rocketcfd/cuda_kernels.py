@@ -62,6 +62,7 @@ _CUDA_SRC = Template(r"""
 #define ORDER2    $ORDER2
 #define LIM       $LIM
 #define WENO      $WENO
+#define WENO9     $WENO9
 #define VISC      $VISC
 #define TURB      $TURB
 #define NOSLIP    $NOSLIP
@@ -291,6 +292,56 @@ __device__ __forceinline__ float weno5(float m2, float m1, float c0,
     float wi = 1.0f / (w0 + w1 + w2);
     return (w0*q0 + w1*q1 + w2*q2) * wi;
 }
+
+#if WENO9
+// 9th-order WENO (Balsara-Shu): five 5-point candidate stencils. Coefficients
+// derived exactly by rational arithmetic (k=3 anchor reproduces the classic
+// WENO5 constants). Wider stencil -> even lower dissipation than WENO5 while
+// keeping the JS nonlinear background dissipation (unlike TENO). Needs SSP-RK3
+// for stability (paired automatically by the solver).
+__device__ __forceinline__ float weno9(float m4, float m3, float m2,
+                                       float m1, float c0, float p1,
+                                       float p2, float p3, float p4){
+    const float eps = 1.0e-6f;
+    float q0 = 0.2f*m4 + -1.05f*m3 + 2.28333333f*m2 + -2.71666667f*m1 + 2.28333333f*c0;
+    float q1 = -0.05f*m3 + 0.283333333f*m2 + -0.716666667f*m1 + 1.28333333f*c0 + 0.2f*p1;
+    float q2 = 0.0333333333f*m2 + -0.216666667f*m1 + 0.783333333f*c0 + 0.45f*p1 + -0.05f*p2;
+    float q3 = -0.05f*m1 + 0.45f*c0 + 0.783333333f*p1 + -0.216666667f*p2 + 0.0333333333f*p3;
+    float q4 = 0.2f*c0 + 1.28333333f*p1 + -0.716666667f*p2 + 0.283333333f*p3 + -0.05f*p4;
+    float t00 = 1.0f*m4 + -4.60104599f*m3 + 8.05152705f*m2 + -6.35552564f*m1 + 1.90504458f*c0;
+    float t01 = 1.0f*m3 + -3.88359111f*m2 + 5.04664266f*m1 + -2.16305156f*c0;
+    float t02 = 1.0f*m2 + -2.50713427f*m1 + 1.50713427f*c0;
+    float t03 = 1.0f*m1 + -1.0f*c0;
+    float b0 = 4.49563492f*t00*t00 + 0.655090319f*t01*t01 + 0.544514727f*t02*t02 + 0.794895173f*t03*t03;
+    float t10 = 1.0f*m3 + -4.40583382f*m2 + 7.181022f*m1 + -5.08374349f*c0 + 1.3085553f*p1;
+    float t11 = 1.0f*m2 + -3.11685869f*m1 + 3.08390465f*c0 + -0.96704596f*p1;
+    float t12 = 1.0f*m1 + -1.63050201f*c0 + 0.630502008f*p1;
+    float t13 = 1.0f*c0 + -1.0f*p1;
+    float b1 = 1.37063492f*t10*t10 + 0.88675494f*t11*t11 + 1.31939988f*t12*t12 + 0.794895173f*t13*t13;
+    float t20 = 1.0f*m2 + -3.6914447f*m1 + 4.91625651f*c0 + -2.818978f*p1 + 0.594166184f*p2;
+    float t21 = 1.0f*m1 + -2.23199733f*c0 + 1.63109602f*p1 + -0.399098694f*p2;
+    float t22 = 1.0f*c0 + -1.40391918f*p1 + 0.403919181f*p2;
+    float t23 = 1.0f*p1 + -1.0f*p2;
+    float b2 = 1.37063492f*t20*t20 + 2.14867349f*t21*t21 + 2.03173518f*t22*t22 + 0.213035701f*t23*t23;
+    float t30 = 1.0f*m1 + -3.09495542f*c0 + 3.64447436f*p1 + -1.94847295f*p2 + 0.398954012f*p3;
+    float t31 = 1.0f*c0 + -1.96270615f*p1 + 1.2407244f*p2 + -0.278018254f*p3;
+    float t32 = 1.0f*p1 + -1.41394484f*p2 + 0.413944842f*p3;
+    float t33 = 1.0f*p2 + -1.0f*p3;
+    float b3 = 4.49563492f*t30*t30 + 5.09676655f*t31*t31 + 1.26795553f*t32*t32 + 0.0438754828f*t33*t33;
+    float t40 = 1.0f*c0 + -3.00923386f*p1 + 3.5157388f*p2 + -1.90647992f*p3 + 0.399974981f*p4;
+    float t41 = 1.0f*p1 + -2.06174779f*p2 + 1.38755044f*p3 + -0.32580266f*p4;
+    float t42 = 1.0f*p2 + -1.4699044f*p3 + 0.469904404f*p4;
+    float t43 = 1.0f*p3 + -1.0f*p4;
+    float b4 = 21.4123016f*t40*t40 + 8.59380922f*t41*t41 + 0.668066225f*t42*t42 + 0.0103691494f*t43*t43;
+    float w0 = 0.00793650794f / ((eps + b0)*(eps + b0));
+    float w1 = 0.158730159f / ((eps + b1)*(eps + b1));
+    float w2 = 0.476190476f / ((eps + b2)*(eps + b2));
+    float w3 = 0.317460317f / ((eps + b3)*(eps + b3));
+    float w4 = 0.0396825397f / ((eps + b4)*(eps + b4));
+    float wi = 1.0f / (w0 + w1 + w2 + w3 + w4);
+    return (w0*q0 + w1*q1 + w2*q2 + w3*q3 + w4*q4) * wi;
+}
+#endif
 #endif
 
 #if CARBFIX
@@ -889,10 +940,42 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
     St qL = qL1, qR = qR1;
     bool hi_done = false;
 
+#if WENO9
+    // 9th-order WENO where the full 10-cell stencil along `dir` is interior
+    // fluid and in-bounds; otherwise cascade to WENO5 -> MUSCL below.
+    {
+        int xm9 = iL - 4*oi, ym9 = jL - 4*oj;      // furthest upwind cell
+        int xp9 = i + 4*oi,  yp9 = j + 4*oj;       // furthest downwind cell
+        if (xm9 >= 0 && ym9 >= 0 && xp9 < SX && yp9 < SY) {
+            int cm4 = IDX(xm9, ym9),             cm3 = IDX(iL - 3*oi, jL - 3*oj);
+            int cm2 = IDX(iL - 2*oi, jL - 2*oj), cm1 = IDX(iL - oi, jL - oj);
+            int cp2 = IDX(i + oi, j + oj),       cp3 = IDX(i + 2*oi, j + 2*oj);
+            int cp4 = IDX(i + 3*oi, j + 3*oj),   cp5 = IDX(xp9, yp9);
+            if (ct[cm4]==0 && ct[cm3]==0 && ct[cm2]==0 && ct[cm1]==0
+                && ct[cL]==0 && ct[cR]==0 && ct[cp2]==0 && ct[cp3]==0
+                && ct[cp4]==0 && ct[cp5]==0) {
+                #define WL(f) weno9(PF(f,cm4),PF(f,cm3),PF(f,cm2),PF(f,cm1),PF(f,cL),PF(f,cR),PF(f,cp2),PF(f,cp3),PF(f,cp4))
+                #define WR(f) weno9(PF(f,cp5),PF(f,cp4),PF(f,cp3),PF(f,cp2),PF(f,cR),PF(f,cL),PF(f,cm1),PF(f,cm2),PF(f,cm3))
+                qL.rho = WL(0); qL.u = WL(1); qL.v = WL(2);
+                qL.p = WL(3);   qL.k = WL(5); qL.w = WL(6);
+                qR.rho = WR(0); qR.u = WR(1); qR.v = WR(2);
+                qR.p = WR(3);   qR.k = WR(5); qR.w = WR(6);
+                #undef WL
+                #undef WR
+                if (qL.rho < RHOMIN || qL.p < PMIN || qL.k < 0.0f || qL.w < WMINV)
+                    qL = qL1;
+                if (qR.rho < RHOMIN || qR.p < PMIN || qR.k < 0.0f || qR.w < WMINV)
+                    qR = qR1;
+                hi_done = true;
+            }
+        }
+    }
+#endif
+
 #if WENO
     // 5th-order WENO where the full 6-cell stencil along `dir` is interior
     // fluid and in-bounds; otherwise fall through to MUSCL below.
-    {
+    if (!hi_done) {
         int xm = iL - 2*oi, ym = jL - 2*oj;        // furthest upwind cell
         int xp = i + 2*oi,  yp = j + 2*oj;         // furthest downwind cell
         if (xm >= 0 && ym >= 0 && xp < SX && yp < SY) {
@@ -1450,10 +1533,13 @@ def build_source(cfg, nx: int, ny: int) -> str:
         PFAR=_f(cfg.farfield_p), TFAR=_f(cfg.farfield_T),
         UFAR=_f(cfg.farfield_u), VFAR=_f(cfg.farfield_v),
         KFAR=_f(1.0e-6), WFAR=_f(10.0),
-        CFL=_f(cfg.cfl),
+        # WENO9's wide stencil has a tighter stability limit (CFL <~ 0.25 even
+        # on RK3), so cap it here regardless of the user's setting
+        CFL=_f(min(cfg.cfl, 0.22) if cfg.muscl_order >= 9 else cfg.cfl),
         SCHEME=_scheme_id(cfg, mode),
         ORDER2=1 if cfg.muscl_order >= 2 else 0,
         WENO=1 if cfg.muscl_order >= 5 else 0,
+        WENO9=1 if cfg.muscl_order >= 9 else 0,
         LIM={"minmod": 0, "vanalbada": 1, "vanleer": 2,
              "superbee": 3}.get(cfg.limiter.lower().replace(" ", ""), 0),
         VISC=1 if cfg.viscous else 0,

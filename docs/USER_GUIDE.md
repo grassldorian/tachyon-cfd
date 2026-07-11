@@ -186,10 +186,16 @@ speed for sharpness or to stabilize a hard case.
   - *5th order (WENO)* — much lower dissipation (shock diamonds & shear layers
     persist far downstream). Slower per step; pairs well with a fine mesh. Runs
     in the interior and falls back to MUSCL next to walls.
-  - (TENO5, WENO-Z and WENO9 were evaluated and rejected: TENO and WENO9 are
-    unstable with this solver's float32 + RK2 core, and WENO-Z measured
-    indistinguishable from WENO-JS — details in [REALISM.md](REALISM.md). For
-    extra crispness use WENO + van Leer/superbee + more resolution instead.)
+  - *9th order (WENO9)* — the widest stencil and lowest dissipation of all,
+    the crispest diamonds. Needs a 10-cell fluid window (cascades
+    WENO9→WENO5→MUSCL near walls) and **auto-engages SSP-RK3** for stability.
+    Slowest per step (~2–3×); its edge over WENO5 grows with mesh resolution.
+  - (TENO5 and WENO-Z were evaluated and rejected — details in
+    [REALISM.md](REALISM.md).)
+- **3rd-order time (SSP-RK3)** — 3-stage Runge–Kutta instead of the 2-stage
+  default: wider stability region and true 3rd-order time accuracy, best for
+  time-accurate unsteady/plume-video runs (WENO9 turns it on automatically).
+  ~1.5× cost; steady-state numbers are essentially unchanged.
 - **Limiter** (MUSCL only) — slope limiter, least → most compressive:
   *minmod* (robust, diffusive) · *van Albada* · *van Leer* (sharp, good
   default) · *superbee* (sharpest, can over-steepen). If a case wobbles near

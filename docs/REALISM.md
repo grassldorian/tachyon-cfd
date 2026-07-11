@@ -180,17 +180,27 @@ out of scope unless requested.
     menu item. (q=6 blows up.)
   - *WENO9* (Balsara-Shu, coefficients derived exactly via rational
     arithmetic, k=3 anchor reproduced the classic WENO5 constants): blew up
-    on the same case despite keeping JS-type nonlinear dissipation. 9th-order
-    upwind eigenvalues sit too close to the imaginary axis for **SSP-RK2**
-    (the literature pairs WENO9 with RK3+), and the 5-point smoothness
-    indicators suffer float32 cancellation at MPa pressure levels.
+    on RK2 (Mach → 1e3) — 9th-order upwind eigenvalues sit too close to the
+    imaginary axis for SSP-RK2, which the literature pairs with RK3+.
+    **NOW SHIPPED (2026-06): SSP-RK3 unlocked it** — see below.
 
-  Conclusion: this solver's float32 + component-wise reconstruction + SSP-RK2
-  core tops out at WENO5-JS — its residual smooth-region dissipation is
-  load-bearing. The path to higher order is an RK3 time integrator plus
-  double-precision smoothness indicators (a major architectural round, noted
-  as future work). Sharpness levers that DO measure today: WENO5 (+24 % vs
-  MUSCL), van Leer/superbee limiter, mesh resolution, the eddy-viscosity cap.
+  Conclusion at the time: on the float32 + component-wise + SSP-RK2 core the
+  reconstruction topped out at WENO5-JS. TENO5's zero background dissipation
+  and WENO-Z's emptiness stand (both stay rejected); WENO9 was the one held
+  back purely by the time integrator.
+- **SSP-RK3 + WENO9 (DONE 2026-06):** added a 3-stage SSP Runge-Kutta
+  integrator (Shu-Osher; the rk_combine kernel was already coefficient-generic,
+  so it is three Python-side stages). `time_order` config / "3rd-order time"
+  GUI toggle (default 2 = bit-identical, verified against the isentropic test).
+  With RK3 the exact-derived **WENO9** is stable — added as the 9th-order
+  spatial option, auto-engaging RK3. Its wider 10-cell stencil also has a
+  tighter CFL limit (measured: blows up at CFL 0.30-0.40, stable at <=0.25
+  even on RK3), so the build auto-caps CFL to 0.22 when WENO9 is selected.
+  Cost ~2-3x/step; sharpness edge over WENO5 is a few % on coarse meshes and
+  grows with resolution. RK3 also gives true
+  3rd-order time accuracy for unsteady/plume-video runs. Remaining higher-order
+  ceiling (double-precision smoothness indicators) is untouched but no longer
+  blocking. Guarded in tests/test_reconstruction.py.
 - **Reconstruction / limiters (DONE 2026-06):** added **WENO5** (5th-order,
   far lower dissipation — preserves ~24 % more downstream shock-cell
   structure than MUSCL-minmod on the test nozzle) plus **van Leer** and

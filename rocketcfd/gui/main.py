@@ -268,18 +268,19 @@ class ConfigPanel(QWidget):
         num.addRow("Riemann solver", self.flux_combo)
         self.order_combo = QComboBox()
         self.order_combo.addItems(["1st order", "2nd order (MUSCL)",
-                                   "5th order (WENO)"])
+                                   "5th order (WENO)", "9th order (WENO9)"])
         self.order_combo.setCurrentIndex(1)
         self.order_combo.setToolTip(
             "Reconstruction accuracy, in ascending sharpness:\n"
             "1st — very diffusive (debugging only).\n"
             "2nd MUSCL — robust default.\n"
             "5th WENO — far lower dissipation; shock diamonds and shear\n"
-            "layers survive much further downstream. Runs in the interior\n"
-            "and falls back to MUSCL next to walls; slower per step.\n"
-            "(TENO5, WENO-Z and WENO9 were evaluated and rejected: TENO and\n"
-            "WENO9 are unstable with this solver's float32 + RK2 core, and\n"
-            "WENO-Z measured identical to WENO — see docs/REALISM.md.)")
+            "layers survive much further downstream.\n"
+            "9th WENO9 — widest stencil, lowest dissipation of all; the\n"
+            "crispest diamonds. Needs a 10-cell fluid window (cascades\n"
+            "WENO9→WENO5→MUSCL near walls) and auto-engages SSP-RK3 time\n"
+            "stepping for stability. Slowest per step (~2x).\n"
+            "(TENO5 and WENO-Z were evaluated and rejected — see REALISM.md.)")
         num.addRow("Spatial order", self.order_combo)
         self.limiter_combo = QComboBox()
         self.limiter_combo.addItems(["minmod", "van Albada", "van Leer",
@@ -303,11 +304,19 @@ class ConfigPanel(QWidget):
         self.compcorr_chk.setToolTip(
             "Wilcox dilatational-dissipation correction for high-Mach shear\n"
             "layers — slows the plume spreading rate to match experiment.")
+        self.rk3_chk = QCheckBox("3rd-order time (SSP-RK3)")
+        self.rk3_chk.setToolTip(
+            "3-stage SSP Runge-Kutta instead of the 2-stage default. Wider\n"
+            "stability region and true 3rd-order time accuracy — better for\n"
+            "time-accurate unsteady plume runs (and required by WENO9, which\n"
+            "engages it automatically). ~1.5x cost per step; steady-state\n"
+            "results are essentially unchanged.")
         num.addRow(self.viscous_chk)
         num.addRow(self.turb_chk)
         num.addRow(self.localdt_chk)
         num.addRow(self.carbuncle_chk)
         num.addRow(self.compcorr_chk)
+        num.addRow(self.rk3_chk)
 
         runc = form("Run control")
         self.btn_run_conv = QPushButton("▶︎  Run until converged")
@@ -342,7 +351,8 @@ class ConfigPanel(QWidget):
         s = cfg.flux_scheme.lower().rstrip("+")
         self.flux_combo.setCurrentIndex(schemes.index(s) if s in schemes else 0)
         self.order_combo.setCurrentIndex(
-            2 if cfg.muscl_order >= 5 else 1 if cfg.muscl_order >= 2 else 0)
+            3 if cfg.muscl_order >= 9 else 2 if cfg.muscl_order >= 5
+            else 1 if cfg.muscl_order >= 2 else 0)
         self.limiter_combo.setCurrentIndex(
             {"minmod": 0, "vanalbada": 1, "vanleer": 2, "superbee": 3}
             .get(cfg.limiter.lower().replace(" ", ""), 0))
@@ -353,6 +363,7 @@ class ConfigPanel(QWidget):
         self.carbuncle_chk.setChecked(getattr(cfg, "carbuncle_fix", True))
         self.compcorr_chk.setChecked(
             getattr(cfg, "compressibility_correction", False))
+        self.rk3_chk.setChecked(getattr(cfg, "time_order", 2) >= 3)
         self.axi_chk.setChecked(cfg.axisymmetric)
         self.smooth_chk.setChecked(cfg.smooth_boundary)
         self.axis_combo.setCurrentIndex(
@@ -378,7 +389,7 @@ class ConfigPanel(QWidget):
             except ValueError:
                 raise ValueError(f"Invalid integer for '{label}'")
         cfg.flux_scheme = ["hllc", "hll", "roe", "ausm"][self.flux_combo.currentIndex()]
-        cfg.muscl_order = {0: 1, 1: 2, 2: 5}[self.order_combo.currentIndex()]
+        cfg.muscl_order = {0: 1, 1: 2, 2: 5, 3: 9}[self.order_combo.currentIndex()]
         cfg.limiter = ["minmod", "vanalbada", "vanleer",
                        "superbee"][self.limiter_combo.currentIndex()]
         cfg.wall_type = "noslip" if self.wall_combo.currentIndex() == 0 else "slip"
@@ -387,6 +398,7 @@ class ConfigPanel(QWidget):
         cfg.local_dt = self.localdt_chk.isChecked()
         cfg.carbuncle_fix = self.carbuncle_chk.isChecked()
         cfg.compressibility_correction = self.compcorr_chk.isChecked()
+        cfg.time_order = 3 if self.rk3_chk.isChecked() else 2
         cfg.axisymmetric = self.axi_chk.isChecked()
         cfg.smooth_boundary = self.smooth_chk.isChecked()
         cfg.axis_location = ["center", "top", "bottom"][self.axis_combo.currentIndex()]

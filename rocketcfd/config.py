@@ -157,6 +157,13 @@ class SimConfig:
     turbulence: bool = True                  # k-omega SST on/off
     wall_type: str = "slip"                  # "slip" or "noslip"
     local_dt: bool = True                    # local time stepping (steady-state acceleration)
+    time_order: int = 2                      # SSP Runge-Kutta stages: 2 (default,
+                                             #   validated) or 3. RK3 is 3rd-order
+                                             #   in time and has a wider stability
+                                             #   region (needed for WENO9, better
+                                             #   for time-accurate unsteady runs);
+                                             #   ~1.5x cost. Auto-raised to 3 when
+                                             #   muscl_order >= 9 (WENO9).
     max_steps: int = 20000
     residual_target: float = 1e-6            # stop when density residual drops below this
 
