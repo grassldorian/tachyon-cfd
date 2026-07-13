@@ -63,6 +63,7 @@ class GPUSolver:
         self.step_count = 0
         self.sim_time = 0.0
         self.residual = 1.0
+        self.residual_abs = float("nan")
         self.res0 = None
         self.res_history: list[tuple[int, float]] = []
         self.thrust_history: list[tuple[int, float]] = []
@@ -208,7 +209,12 @@ class GPUSolver:
         cp.cuda.runtime.deviceSynchronize()
         if r > 0.0 and (self.res0 is None or r > self.res0):
             self.res0 = r
+        # residual normalized by the largest value seen (robust against the
+        # soft-start ramp, but plateaus and cannot tell "converged" from
+        # "genuinely unsteady"); residual_abs is the raw L2 density residual,
+        # which does converge toward zero for a truly steady solution.
         self.residual = r / self.res0 if self.res0 else 1.0
+        self.residual_abs = r
         self.res_history.append((self.step_count, self.residual))
         dt_wall = time.perf_counter() - t_start
         self._steps_per_sec = n / dt_wall if dt_wall > 0 else 0.0
@@ -299,6 +305,7 @@ class GPUSolver:
             self.thrust_history.append((self.step_count, perf["F"]))
         meta = {
             "step": self.step_count, "residual": self.residual,
+            "residual_abs": getattr(self, "residual_abs", float("nan")),
             "sim_time": self.sim_time, "steps_per_sec": self._steps_per_sec,
             "performance": perf,
             "stretched": self._stretch_sx is not None,
@@ -310,3 +317,46 @@ class GPUSolver:
         np.savez_compressed(path, **{k: v for k, v in snap["fields"].items()},
                             step=snap["meta"]["step"],
                             x_centers=snap["x_centers"])
+
+    # ------------------------------------------------------------------
+    # Checkpoint / restart: the full conserved state, so a long run can be
+    # resumed exactly where it stopped (100k-step plumes are expensive). Only
+    # the device conserved arrays + run counters are stored; the mask and cfg
+    # are supplied again by the caller when reconstructing the solver.
+    CKPT_VERSION = 1
+
+    def save_state(self, path: str) -> None:
+        """Write a restartable checkpoint of the conserved state."""
+        cp = self.cp
+        data = dict(
+            version=self.CKPT_VERSION,
+            nx=self.nx, ny=self.ny,
+            U=cp.asnumpy(self.U),
+            step_count=self.step_count, sim_time=self.sim_time,
+            res0=(self.res0 if self.res0 is not None else 0.0),
+            two_gamma=self.two_gamma,
+        )
+        if self.two_gamma:
+            data["UZ"] = cp.asnumpy(self.UZ)
+        np.savez(path, **data)
+
+    def load_state(self, path: str) -> None:
+        """Restore a checkpoint written by ``save_state`` onto this solver.
+
+        The solver must have been built with the same mask (grid dimensions are
+        checked); cfg may differ (e.g. resume at a new back-pressure)."""
+        cp = self.cp
+        d = np.load(path, allow_pickle=False)
+        if int(d["nx"]) != self.nx or int(d["ny"]) != self.ny:
+            raise ValueError(
+                f"checkpoint grid {int(d['nx'])}x{int(d['ny'])} != "
+                f"solver grid {self.nx}x{self.ny}")
+        self.U[...] = cp.asarray(d["U"])
+        self.step_count = int(d["step_count"])
+        self.sim_time = float(d["sim_time"])
+        r0 = float(d["res0"])
+        self.res0 = r0 if r0 > 0.0 else None
+        if self.two_gamma and "UZ" in d.files:
+            self.UZ[...] = cp.asarray(d["UZ"])
+            cp.copyto(self.UZ0, self.UZ)
+        cp.copyto(self.U0, self.U)

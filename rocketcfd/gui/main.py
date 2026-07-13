@@ -311,12 +311,22 @@ class ConfigPanel(QWidget):
             "time-accurate unsteady plume runs (and required by WENO9, which\n"
             "engages it automatically). ~1.5x cost per step; steady-state\n"
             "results are essentially unchanged.")
+        self.charweno_chk = QCheckBox("Characteristic WENO")
+        self.charweno_chk.setToolTip(
+            "Reconstruct WENO in the Roe eigenfields (acoustic / entropy /\n"
+            "shear) instead of component-wise on the primitives — the\n"
+            "eigenfields stay smooth across a shock, so the reconstruction\n"
+            "rings less. Most useful on fine meshes / low-dissipation runs; on\n"
+            "turbulent (RANS) cases the eddy viscosity dominates and the effect\n"
+            "is small. Only acts with 5th/9th-order (WENO). The CFL is auto-\n"
+            "capped for stability (0.30 at 5th, 0.10 at 9th order — ~2x slower).")
         num.addRow(self.viscous_chk)
         num.addRow(self.turb_chk)
         num.addRow(self.localdt_chk)
         num.addRow(self.carbuncle_chk)
         num.addRow(self.compcorr_chk)
         num.addRow(self.rk3_chk)
+        num.addRow(self.charweno_chk)
 
         runc = form("Run control")
         self.btn_run_conv = QPushButton("▶︎  Run until converged")
@@ -364,6 +374,7 @@ class ConfigPanel(QWidget):
         self.compcorr_chk.setChecked(
             getattr(cfg, "compressibility_correction", False))
         self.rk3_chk.setChecked(getattr(cfg, "time_order", 2) >= 3)
+        self.charweno_chk.setChecked(getattr(cfg, "char_weno", False))
         self.axi_chk.setChecked(cfg.axisymmetric)
         self.smooth_chk.setChecked(cfg.smooth_boundary)
         self.axis_combo.setCurrentIndex(
@@ -399,6 +410,7 @@ class ConfigPanel(QWidget):
         cfg.carbuncle_fix = self.carbuncle_chk.isChecked()
         cfg.compressibility_correction = self.compcorr_chk.isChecked()
         cfg.time_order = 3 if self.rk3_chk.isChecked() else 2
+        cfg.char_weno = self.charweno_chk.isChecked()
         cfg.axisymmetric = self.axi_chk.isChecked()
         cfg.smooth_boundary = self.smooth_chk.isChecked()
         cfg.axis_location = ["center", "top", "bottom"][self.axis_combo.currentIndex()]

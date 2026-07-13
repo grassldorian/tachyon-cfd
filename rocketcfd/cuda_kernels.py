@@ -63,6 +63,7 @@ _CUDA_SRC = Template(r"""
 #define LIM       $LIM
 #define WENO      $WENO
 #define WENO9     $WENO9
+#define CHARWENO  $CHARWENO
 #define VISC      $VISC
 #define TURB      $TURB
 #define NOSLIP    $NOSLIP
@@ -815,9 +816,16 @@ __global__ void halo_fill(float* P, const unsigned char* ct)
         mut = PF(8,cI);
         if (un >= 0.0f) {                    // outflow
             if (un >= a) { rho = ri; u = ui; v = vi; p = pi; k = ki; w = wi; }
-            else {                            // subsonic: impose farfield pressure
+            else {                            // subsonic: relax pressure toward
+                                              // ambient (same law as the flux
+                                              // ghost, so gradients/viscous terms
+                                              // at the outlet stay consistent)
+#if OUTRELAXONE
                 p = PFAR;
-                rho = ri * powf(PFAR / pi, 1.0f / gI);
+#else
+                p = pi + OUTRELAX * (PFAR - pi);
+#endif
+                rho = ri * powf(p / pi, 1.0f / gI);
                 u = ui; v = vi; k = ki; w = wi;
             }
         } else {                              // inflow
@@ -912,6 +920,49 @@ __global__ void turb_visc(float* P, const float* G, const float* wd,
 #endif
 }
 
+// ------------------------------------------------ characteristic-WENO helpers
+// Reconstruct in the Roe eigenfields of the face-normal 1-D Euler system rather
+// than component-wise on primitives: the acoustic/entropy/shear fields are
+// smooth across a shock where the primitives are not, so WENO on them rings far
+// less (crisper Mach disks / diamonds). The eigenvectors are frozen at the face
+// Roe state, so each field is a linear combination of the primitives with
+// constant coefficients — WENO on the field then the exact inverse map below is
+// the standard characteristic reconstruction (Qiu & Shu). GAM is exact for the
+// calorically-perfect model (the usual rocket case) and a good frozen proxy for
+// the variable-cp models — it only shapes the reconstruction, never the flux.
+//   C1: (u_n - a) acoustic   C2: entropy   C3: (u_n + a) acoustic   _UTc: shear
+#define CHAR_SETUP \
+    float _aL = sqrtf(GAM * qL1.p / fmaxf(qL1.rho, RHOMIN)); \
+    float _aR = sqrtf(GAM * qR1.p / fmaxf(qR1.rho, RHOMIN)); \
+    float _ah = 0.5f * (_aL + _aR); \
+    float _rh = sqrtf(fmaxf(qL1.rho, RHOMIN)) * sqrtf(fmaxf(qR1.rho, RHOMIN)); \
+    float _c2a = 1.0f / (_ah * _ah); \
+    float _c1u = -0.5f * _rh / _ah, _c1p = 0.5f * _c2a, _air = _ah / _rh
+#define _UNc(c) ((dir == 0) ? PF(1,c) : PF(2,c))
+#define _UTc(c) ((dir == 0) ? PF(2,c) : PF(1,c))
+#define C1(c) (_c1u * _UNc(c) + _c1p * PF(3,c))
+#define C2(c) (PF(0,c) - PF(3,c) * _c2a)
+#define C3(c) (-_c1u * _UNc(c) + _c1p * PF(3,c))
+#define C5(c) PF(5,c)
+#define C6(c) PF(6,c)
+// Bound a reconstructed eigenfield to the range spanned by the two face-adjacent
+// cells: WENO cannot then introduce a new extremum, which (because the inverse
+// map amplifies the acoustic fields by a/rho, huge at strong contacts) is what
+// otherwise lets a small overshoot explode into a spurious velocity spike.
+#define _CLB(val, F) fminf(fmaxf((val), fminf(F(cL), F(cR))), fmaxf(F(cL), F(cR)))
+// W is the biased WENO applied to a field macro (WL/WR); rebuild the face state.
+#define CHAR_ASSIGN(W, q) do { \
+    float _w1 = _CLB(W(C1), C1), _w2 = _CLB(W(C2), C2); \
+    float _w3 = _CLB(W(C3), C3), _wt = _CLB(W(_UTc), _UTc); \
+    float _un = _air * (_w3 - _w1); \
+    (q).rho = _w1 + _w2 + _w3; \
+    (q).p   = _ah * _ah * (_w1 + _w3); \
+    if (dir == 0) { (q).u = _un; (q).v = _wt; } \
+    else          { (q).v = _un; (q).u = _wt; } \
+    (q).k = _CLB(W(C5), C5); (q).w = _CLB(W(C6), C6); \
+} while (0)
+#define CHAR_TEARDOWN ((void)0)
+
 // ---------------------------------------------------------------- fluxes
 // MUSCL + HLL(C) inviscid flux and central viscous flux through faces.
 // dir==0: face between (i-1,j) and (i,j); dir==1: between (i,j-1) and (i,j).
@@ -954,6 +1005,16 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
             if (ct[cm4]==0 && ct[cm3]==0 && ct[cm2]==0 && ct[cm1]==0
                 && ct[cL]==0 && ct[cR]==0 && ct[cp2]==0 && ct[cp3]==0
                 && ct[cp4]==0 && ct[cp5]==0) {
+#if CHARWENO
+                CHAR_SETUP;
+                #define WL(f) weno9(f(cm4),f(cm3),f(cm2),f(cm1),f(cL),f(cR),f(cp2),f(cp3),f(cp4))
+                #define WR(f) weno9(f(cp5),f(cp4),f(cp3),f(cp2),f(cR),f(cL),f(cm1),f(cm2),f(cm3))
+                CHAR_ASSIGN(WL, qL);
+                CHAR_ASSIGN(WR, qR);
+                #undef WL
+                #undef WR
+                CHAR_TEARDOWN;
+#else
                 #define WL(f) weno9(PF(f,cm4),PF(f,cm3),PF(f,cm2),PF(f,cm1),PF(f,cL),PF(f,cR),PF(f,cp2),PF(f,cp3),PF(f,cp4))
                 #define WR(f) weno9(PF(f,cp5),PF(f,cp4),PF(f,cp3),PF(f,cp2),PF(f,cR),PF(f,cL),PF(f,cm1),PF(f,cm2),PF(f,cm3))
                 qL.rho = WL(0); qL.u = WL(1); qL.v = WL(2);
@@ -962,6 +1023,7 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
                 qR.p = WR(3);   qR.k = WR(5); qR.w = WR(6);
                 #undef WL
                 #undef WR
+#endif
                 if (qL.rho < RHOMIN || qL.p < PMIN || qL.k < 0.0f || qL.w < WMINV)
                     qL = qL1;
                 if (qR.rho < RHOMIN || qR.p < PMIN || qR.k < 0.0f || qR.w < WMINV)
@@ -983,6 +1045,16 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
             int cp2 = IDX(i + oi, j + oj), cp3 = IDX(xp, yp);
             if (ct[cm2]==0 && ct[cm1]==0 && ct[cL]==0 && ct[cR]==0
                 && ct[cp2]==0 && ct[cp3]==0) {
+#if CHARWENO
+                CHAR_SETUP;
+                #define WL(f) weno5(f(cm2),f(cm1),f(cL),f(cR),f(cp2))
+                #define WR(f) weno5(f(cp3),f(cp2),f(cR),f(cL),f(cm1))
+                CHAR_ASSIGN(WL, qL);
+                CHAR_ASSIGN(WR, qR);
+                #undef WL
+                #undef WR
+                CHAR_TEARDOWN;
+#else
                 #define WL(f) weno5(PF(f,cm2),PF(f,cm1),PF(f,cL),PF(f,cR),PF(f,cp2))
                 #define WR(f) weno5(PF(f,cp3),PF(f,cp2),PF(f,cR),PF(f,cL),PF(f,cm1))
                 qL.rho = WL(0); qL.u = WL(1); qL.v = WL(2);
@@ -991,6 +1063,7 @@ __global__ void fluxes(const float* P, const float* G, const unsigned char* ct,
                 qR.p = WR(3);   qR.k = WR(5); qR.w = WR(6);
                 #undef WL
                 #undef WR
+#endif
                 if (qL.rho < RHOMIN || qL.p < PMIN || qL.k < 0.0f || qL.w < WMINV)
                     qL = qL1;
                 if (qR.rho < RHOMIN || qR.p < PMIN || qR.k < 0.0f || qR.w < WMINV)
@@ -1273,7 +1346,18 @@ __global__ void rk_combine(const float* U0, float* U, const float* P,
     // omega into k (slower high-Mach shear-layer spreading; off at walls
     // where k->0). xi* = 1.5, Mt0^2 = 0.25.
     {
+        // sound speed with the correct gamma for the active gas model (the
+        // turbulent Mach number was previously computed with the fixed GAM even
+        // in thermally-perfect / equilibrium mode)
+#if THERMO == 1
+        float a2c = gam_T(PF(4,c)) * fmaxf(PF(3,c), PMIN) / fmaxf(PF(0,c), RHOMIN);
+#elif THERMO == 2
+        float ac_ = eq_lerp(EQ_A, log10f(fmaxf(PF(0,c), RHOMIN)),
+                            log10f(fmaxf(PF(4,c), TMINT)));
+        float a2c = ac_ * ac_;
+#else
         float a2c = GAM * fmaxf(PF(3,c), PMIN) / fmaxf(PF(0,c), RHOMIN);
+#endif
         float Mt2 = 2.0f * fmaxf(PF(5,c), 0.0f) / fmaxf(a2c, 1.0e-6f);
         float Fc = fmaxf(Mt2 - 0.25f, 0.0f);
         bstar_c = BSTAR * (1.0f + 1.5f * Fc);
@@ -1534,12 +1618,23 @@ def build_source(cfg, nx: int, ny: int) -> str:
         UFAR=_f(cfg.farfield_u), VFAR=_f(cfg.farfield_v),
         KFAR=_f(1.0e-6), WFAR=_f(10.0),
         # WENO9's wide stencil has a tighter stability limit (CFL <~ 0.25 even
-        # on RK3), so cap it here regardless of the user's setting
-        CFL=_f(min(cfg.cfl, 0.22) if cfg.muscl_order >= 9 else cfg.cfl),
+        # on RK3); characteristic reconstruction tightens it further (the wide
+        # eigenfield stencil is very low-dissipation), so cap accordingly.
+        CFL=_f(min(cfg.cfl,
+                   0.10 if (cfg.muscl_order >= 9
+                            and getattr(cfg, "char_weno", False))
+                   else 0.22 if cfg.muscl_order >= 9
+                   else 0.30 if getattr(cfg, "char_weno", False)
+                   else cfg.cfl)),
         SCHEME=_scheme_id(cfg, mode),
         ORDER2=1 if cfg.muscl_order >= 2 else 0,
         WENO=1 if cfg.muscl_order >= 5 else 0,
         WENO9=1 if cfg.muscl_order >= 9 else 0,
+        # characteristic-variable WENO: project the stencil onto the Roe
+        # eigenfields before reconstructing (crisper shocks, less ringing);
+        # only meaningful when a WENO order is active
+        CHARWENO=1 if (getattr(cfg, "char_weno", False)
+                       and cfg.muscl_order >= 5) else 0,
         LIM={"minmod": 0, "vanalbada": 1, "vanleer": 2,
              "superbee": 3}.get(cfg.limiter.lower().replace(" ", ""), 0),
         VISC=1 if cfg.viscous else 0,

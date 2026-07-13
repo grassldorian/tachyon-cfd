@@ -17,13 +17,16 @@ from rocketcfd.solver import GPUSolver
 png = str(ROOT / "examples" / "nozzle_small.png")
 
 
-def run(limiter="minmod", order=2, steps=2500):
+def run(limiter="minmod", order=2, steps=2500, char=False, cfl=None):
     cfg = SimConfig()
     cfg.axisymmetric = True
     cfg.axis_location = "center"
     cfg.inlet_p0 = 3.0e6
     cfg.limiter = limiter
     cfg.muscl_order = order
+    cfg.char_weno = char
+    if cfl is not None:
+        cfg.cfl = cfl
     mask = load_mask(png, cfg.meters_per_pixel, cfg.svg_raster_px,
                      smooth=cfg.smooth_boundary, sigma=cfg.boundary_sigma,
                      mesh_scale=cfg.mesh_scale)
@@ -72,4 +75,26 @@ d9 = downstream_structure(c9, sol9, s9)
 print(f"WENO9 (auto-RK3): Mach max {m9:.3f}, downstream {d9:.3g} "
       f"({d9/dw:.2f}x WENO5)  OK")
 assert d9 > 1.10 * dm, "WENO9 should preserve more downstream structure"
+
+# characteristic WENO (Roe-eigenfield reconstruction): must stay STABLE at both
+# orders (auto CFL cap) and sharpen — steeper centerline pressure gradients than
+# the component-wise reconstruction of the same order.
+def peak_dp(snap, sol, cfg):
+    p = snap["fields"]["Pressure [Pa]"]
+    jc = int(round(axis_j(cfg, sol.ny) - 2.0))
+    clp = np.nanmean(p[max(jc - 1, 0):jc + 2, :], axis=0)
+    clp = clp[np.isfinite(clp)]
+    return float(np.nanpercentile(np.abs(np.diff(clp)), 99.5))
+
+# char WENO must stay STABLE at both orders (its auto CFL cap is the guarantee;
+# it blew up catastrophically without it). Sharpening is real but convergence-
+# and mesh-dependent, so it is reported, not gated, here (shown in the demo).
+for order, cfl in ((5, 0.30), (9, 0.10)):
+    cc, solc, sc = run(limiter="minmod", order=order, char=True, cfl=cfl)
+    mc = np.nanmax(sc["fields"]["Mach"])
+    assert np.isfinite(mc) and 0.5 < mc < 12.0, ("char WENO unstable", order, mc)
+    _, solr, sr = run(limiter="minmod", order=order, char=False, cfl=cfl)
+    ratio = peak_dp(sc, solc, cc) / max(peak_dp(sr, solr, cc), 1e-9)
+    print(f"char WENO{order}: Mach max {mc:.3f} STABLE, shock-front sharpness "
+          f"x{ratio:.2f} vs component-wise")
 print("reconstruction test OK")

@@ -150,7 +150,14 @@ class SimConfig:
 
     flux_scheme: str = "hllc"                # "hllc" | "hll" | "roe" | "ausm"
     muscl_order: int = 2                     # 1 = first order, 2 = MUSCL,
-                                             #   5 = WENO5
+                                             #   5 = WENO5, 9 = WENO9
+    char_weno: bool = False                  # reconstruct WENO in characteristic
+                                             #   (Roe eigenfield) variables rather
+                                             #   than component-wise on primitives:
+                                             #   crisper shocks / less ringing at
+                                             #   strong discontinuities (shock
+                                             #   diamonds). Only acts with WENO
+                                             #   (muscl_order >= 5).
     limiter: str = "minmod"                  # "minmod" or "vanalbada"
     cfl: float = 0.40
     viscous: bool = True
