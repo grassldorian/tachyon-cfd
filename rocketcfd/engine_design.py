@@ -172,60 +172,101 @@ def optimize_geometry(prop: dict, pc: float, pa: float, target_thrust: float,
 # --------------------------------------------------------------------------- #
 #  Wall contour
 # --------------------------------------------------------------------------- #
-def _round_corners(x, r, idxs, radius: float, n_arc: int = 16):
-    """Replace the sharp interior vertices in ``idxs`` with tangent circular
-    fillets of radius ``radius`` mm; every other vertex passes through
-    untouched. The tangent length is clamped to 45% of each adjoining segment,
-    so neighbouring fillets (the chamber corner and the throat) can never
-    overlap even at large radii, and the fillet degrades gracefully instead of
-    inverting the wall. Returns the resampled (x, r)."""
-    pts = np.column_stack([np.asarray(x, float), np.asarray(r, float)])
-    if radius <= 0.0:
-        return pts[:, 0], pts[:, 1]
-    want = {i for i in idxs if 0 < i < len(pts) - 1}
-    out = [pts[0]]
-    for j in range(1, len(pts) - 1):
-        V = pts[j]
-        if j not in want:
-            out.append(V)
-            continue
-        A, B = pts[j - 1], pts[j + 1]
-        u, w = A - V, B - V
-        lu, lw = float(np.hypot(*u)), float(np.hypot(*w))
+def _round_corners(x, r, radius_by_idx: dict, n_arc: int = 16):
+    """Replace selected interior vertices with tangent circular fillets.
+
+    ``radius_by_idx`` maps a vertex index to its fillet radius (mm); every other
+    vertex passes through untouched. Each corner's incoming leg is the straight
+    upstream segment, while the outgoing leg is found by *walking* downstream
+    along the contour until roughly one radius of arc length is covered — so a
+    corner whose downstream side is a densely sampled curve (the Rao throat arc)
+    still gets a meaningful fillet instead of collapsing against the first,
+    millimetre-away sample. Tangent lengths are clamped to 45% of the upstream
+    segment and 90% of the downstream reach, so neighbouring fillets (chamber
+    corner + throat) never overlap or invert the wall. Returns (x, r)."""
+    P = np.column_stack([np.asarray(x, float), np.asarray(r, float)]).astype(float)
+    n = len(P)
+    want = {i: rr for i, rr in radius_by_idx.items()
+            if rr > 0.0 and 0 < i < n - 1}
+    if not want:
+        return P[:, 0], P[:, 1]
+    seg = np.hypot(np.diff(P[:, 0]), np.diff(P[:, 1]))   # seg[i]=|P[i+1]-P[i]|
+    cum = np.concatenate([[0.0], np.cumsum(seg)])        # arclength to vertex i
+    order = sorted(want)
+    reps: dict[int, tuple] = {}                          # j -> (arc pts, n_drop)
+    for j, radius in want.items():
+        V = P[j]
+        u = P[j - 1] - V
+        lu = float(np.hypot(*u))
+        # walk downstream ~one radius of arc length to get a representative
+        # outgoing tangent (chord over the covered arc)
+        acc, m = 0.0, j
+        while m + 1 < n and acc + seg[m] < radius:
+            acc += seg[m]
+            m += 1
+        if m == j:
+            m = j + 1                                    # radius < first segment
+        w = P[m] - V
+        lw = float(np.hypot(*w))
         if lu < 1e-9 or lw < 1e-9:
-            out.append(V)
             continue
         u, w = u / lu, w / lw
         alpha = math.acos(float(np.clip(np.dot(u, w), -1.0, 1.0)))
-        if alpha < 1e-3 or alpha > math.pi - 1e-3:   # already straight
-            out.append(V)
+        if alpha < 1e-3 or alpha > math.pi - 1e-3:       # already straight
             continue
         half = 0.5 * alpha
-        t = min(radius / math.tan(half), 0.45 * lu, 0.45 * lw)
-        reff = t * math.tan(half)                    # radius after clamping
+        # a neighbouring filleted corner bounds how far this one may reach along
+        # the shared span, so two adjacent fillets can never cross (each takes
+        # at most 45% of the arclength between them)
+        prev_c = max([c for c in order if c < j], default=0)
+        next_c = min([c for c in order if c > j], default=n - 1)
+        up_span = cum[j] - cum[prev_c]
+        dn_span = cum[next_c] - cum[j]
+        t = min(radius / math.tan(half), 0.45 * lu, 0.90 * lw,
+                0.45 * up_span, 0.45 * dn_span)
+        reff = t * math.tan(half)                        # radius after clamping
         T1, T2 = V + u * t, V + w * t
         bis = u + w
         bis = bis / float(np.hypot(*bis))
-        C = V + bis * (reff / math.sin(half))        # fillet-circle centre
+        C = V + bis * (reff / math.sin(half))            # fillet-circle centre
         a1 = math.atan2(T1[1] - C[1], T1[0] - C[0])
         a2 = math.atan2(T2[1] - C[1], T2[0] - C[0])
         da = (a2 - a1 + math.pi) % (2.0 * math.pi) - math.pi   # short way
         ang = a1 + da * np.linspace(0.0, 1.0, n_arc)
-        out.extend(np.column_stack([C[0] + reff * np.cos(ang),
-                                    C[1] + reff * np.sin(ang)]))
-    out.append(pts[-1])
-    P = np.asarray(out, dtype=float)
-    return P[:, 0], P[:, 1]
+        arc = np.column_stack([C[0] + reff * np.cos(ang),
+                               C[1] + reff * np.sin(ang)])
+        # drop the vertex itself + any downstream samples the fillet swallows
+        drop, dacc, k = 0, 0.0, j
+        while k + 1 < n and dacc + seg[k] < t:
+            dacc += seg[k]
+            drop += 1
+            k += 1
+        reps[j] = (arc, drop)
+    out, skip = [], 0
+    for j in range(n):
+        if skip > 0:
+            skip -= 1
+            continue
+        if j in reps:
+            arc, drop = reps[j]
+            out.extend(arc)
+            skip = drop
+        else:
+            out.append(P[j])
+    P2 = np.asarray(out, dtype=float)
+    return P2[:, 0], P2[:, 1]
 
 
 def build_contour(geom: dict, nozzle_type: str = "Conical (15°)",
-                  fillet_mm: float = 0.0):
+                  fillet_mm: float = 0.0, throat_r_mm: float = 0.0):
     """Upper engine-wall contour (x, r) in mm, plus station keys.
 
-    ``fillet_mm`` > 0 rounds the two structural corners — the chamber /
-    converging-cone junction and (conical only) the throat — with tangent
-    circular fillets of that radius. Rao/Bell nozzles already carry a smooth
-    tangent throat arc, so only their chamber corner is rounded."""
+    ``fillet_mm`` rounds the chamber / converging-cone junction; ``throat_r_mm``
+    rounds the throat corner. Both use tangent circular fillets of that radius.
+    On a conical nozzle the throat is a genuine sharp vertex; on a Rao/Bell
+    nozzle it is the junction where the straight converging line meets the
+    downstream throat arc, and the arc-walking fillet blends that in as an
+    upstream throat radius."""
     lc = geom["chamber_l"] * 1000.0
     dc = geom["chamber_d"] * 1000.0
     ln = geom["nozzle_l"] * 1000.0
@@ -240,14 +281,12 @@ def build_contour(geom: dict, nozzle_type: str = "Conical (15°)",
         x = np.concatenate([[x0, x1], x2 + xb])
         r = np.concatenate([[rc, rc], rb])
         x3 = x[-1]
-        corner_idx = [1]                       # throat is a tangent arc already
     else:
         x3 = lc + l_conv + ln
         x = np.array([x0, x1, x2, x3])
         r = np.array([rc, rc, rt, re])
-        corner_idx = [1, 2]                     # chamber junction + sharp throat
-    if fillet_mm > 0.0 and l_conv > 1e-6:
-        x, r = _round_corners(x, r, corner_idx, fillet_mm)
+    if l_conv > 1e-6:                            # need a corner to round
+        x, r = _round_corners(x, r, {1: fillet_mm, 2: throat_r_mm})
     return x, r, dict(x_inj=x0, x_chend=x1, x_throat=x2, x_exit=x3,
                       rc=rc, rt=rt, re=re)
 
@@ -298,7 +337,8 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    wall_mm: float | None = None, add_inlet: bool = True,
                    inlet_frac: float = 0.75, analytic: bool = False,
                    enclose: bool = True, half: bool = False,
-                   expand_deg: float = 0.0, fillet_mm: float = 0.0):
+                   expand_deg: float = 0.0, fillet_mm: float = 0.0,
+                   throat_r_mm: float = 0.0):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
 
     Returns (rgb uint8 array (H, W, 3), info dict). ``info`` carries
@@ -311,7 +351,8 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     """
     from PIL import Image, ImageDraw
 
-    x, r, key = build_contour(geom, nozzle_type, fillet_mm=fillet_mm)
+    x, r, key = build_contour(geom, nozzle_type, fillet_mm=fillet_mm,
+                              throat_r_mm=throat_r_mm)
     L = float(key["x_exit"])                       # engine length [mm]
     rc, rt, re = key["rc"], key["rt"], key["re"]
     rmax = max(rc, re)

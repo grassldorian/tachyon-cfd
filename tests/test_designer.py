@@ -67,6 +67,29 @@ rms = float(np.sqrt(np.mean((np.array(ys) - A @ coef) ** 2)))
 assert rms < 1e-3, f"analytic surface not exact: RMS {rms:.5f} px"
 print(f"analytic SDF: cone-wall surface RMS {rms:.6f} px (exact)")
 
+# 1d. corner fillet + throat radius smooth the two hard corners; radius 0 is
+#     byte-identical to the sharp contour (no regression to existing masks)
+def _max_kink(xx, rr):
+    P = np.column_stack([xx, rr])
+    d = np.diff(P, axis=0)
+    L = np.hypot(d[:, 0], d[:, 1])
+    d = d[L > 1e-9] / L[L > 1e-9, None]
+    dots = np.clip(np.sum(d[:-1] * d[1:], axis=1), -1, 1)
+    return float(np.degrees(np.arccos(dots)).max())
+
+for nozzle in ("Conical (15°)", "Bell (Rao 80%)"):
+    x0, r0, _ = ed.build_contour(geom, nozzle)
+    xz, rz, _ = ed.build_contour(geom, nozzle, fillet_mm=0.0, throat_r_mm=0.0)
+    assert np.array_equal(x0, xz) and np.array_equal(r0, rz), nozzle
+    xf, rf, _ = ed.build_contour(geom, nozzle, fillet_mm=4.0, throat_r_mm=6.0)
+    assert _max_kink(xf, rf) < 0.6 * _max_kink(x0, r0), nozzle
+    # rounded throat stays physical: min radius rises slightly, never inverts
+    assert rf.min() >= r0.min() - 1e-6 and rf.min() > 0
+    # absurd radii must not fold the wall back on itself
+    xh, rh, _ = ed.build_contour(geom, nozzle, fillet_mm=40.0, throat_r_mm=40.0)
+    assert np.diff(xh).min() > -1e-6 and rh.min() > 0, nozzle
+print("corner fillet + throat radius: smoothed, radius-0 identical, stable")
+
 # 2. the mask loads into the solver pipeline with fluid + inlet cells
 import tempfile
 from PIL import Image

@@ -43,4 +43,26 @@ f = np.random.rand(320, 320).astype(np.float32)
 img, r_max = revolve_project(f, 159.5)
 assert img.shape == (2 * r_max, 320) and np.isfinite(img[r_max]).all()
 
+# streamline / vector overlay: feed a synthetic velocity snapshot and confirm
+# the overlay curve item gets drawn (and hides again when switched off)
+ny, nx = win.img_ny, win.img_nx
+jj = np.arange(ny)[:, None].astype(np.float32)
+uf = np.full((ny, nx), 300.0, np.float32)
+vf = (jj - ny / 2) * 3.0 * np.ones((1, nx), np.float32)
+mf = np.hypot(uf, vf) / 340.0
+uf[:6, :] = np.nan            # a wall band the integrator must stop at
+vf[:6, :] = np.nan
+mf[:6, :] = np.nan
+win.last_snap = {"fields": {"Mach": mf, "Velocity u [m/s]": uf,
+                            "Velocity v [m/s]": vf}}
+for mode in ("streamlines", "vectors"):
+    win.overlay_combo.setCurrentText(mode)
+    win.refresh_view()
+    xd, yd = win.flow_overlay.getData()
+    assert win.flow_overlay.isVisible() and xd is not None and len(xd) > 0, mode
+win.overlay_combo.setCurrentText("none")
+win.refresh_view()
+assert not win.flow_overlay.isVisible()
+print("flow overlay OK")
+
 print("GUI construction OK")

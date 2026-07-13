@@ -104,14 +104,20 @@ class DesignerTab(QWidget):
         self.fillet_edit = StepLineEdit("0", step=0.5, minimum=0.0, decimals=1)
         self.fillet_edit.textChanged.connect(self._schedule)
         self.fillet_edit.setToolTip(
-            "Round the two hard corners — the chamber-to-nozzle contraction\n"
-            "and (conical only) the throat — with a tangent fillet of this\n"
-            "radius (mm). 0 = sharp. Smooths the wall so the flow turns\n"
-            "gradually (less corner separation, a cleaner throat). A large\n"
-            "fillet slightly widens the effective throat. Bell nozzles already\n"
-            "have a smooth tangent throat arc, so only their chamber corner\n"
-            "is rounded.  ↑ / ↓: ±0.5 mm  (Shift ±5, Ctrl ±0.05)")
-        gf.addRow("Corner fillet [mm]", self.fillet_edit)
+            "Round the chamber-to-nozzle contraction corner with a tangent\n"
+            "fillet of this radius (mm). 0 = sharp. Smooths the wall so the\n"
+            "flow turns gradually into the converging cone (less corner\n"
+            "separation).  ↑ / ↓: ±0.5 mm  (Shift ±5, Ctrl ±0.05)")
+        gf.addRow("Chamber fillet [mm]", self.fillet_edit)
+        self.throat_edit = StepLineEdit("0", step=0.5, minimum=0.0, decimals=1)
+        self.throat_edit.textChanged.connect(self._schedule)
+        self.throat_edit.setToolTip(
+            "Round the throat with a tangent radius (mm). 0 = sharp corner\n"
+            "(conical) / bare tangent arc (bell). A real engine always has a\n"
+            "throat radius; adding one here blends the converging cone into\n"
+            "the throat, kills the sharp corner, and slightly widens the\n"
+            "effective throat area.  ↑ / ↓: ±0.5 mm  (Shift ±5, Ctrl ±0.05)")
+        gf.addRow("Throat radius [mm]", self.throat_edit)
         ll.addWidget(geo)
 
         op = QGroupBox("Operating point")
@@ -245,6 +251,7 @@ class DesignerTab(QWidget):
             margin = max(0.05, float(self.margin_edit.text()))
             expand = max(0.0, min(60.0, float(self.expand_edit.text())))
             fillet = max(0.0, float(self.fillet_edit.text()))
+            throat_r = max(0.0, float(self.throat_edit.text()))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             pc = float(self.pc_edit.text()) * 1e5
             pa = ed.ambient_pressure(float(self.alt_edit.text()))
@@ -269,7 +276,7 @@ class DesignerTab(QWidget):
             add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
             enclose=self.enclose_chk.isChecked(),
             half=self.half_chk.isChecked(), expand_deg=expand,
-            fillet_mm=fillet)
+            fillet_mm=fillet, throat_r_mm=throat_r)
         self._rgb, self._info = rgb, info
 
         self._show_preview(rgb)
@@ -336,6 +343,7 @@ class DesignerTab(QWidget):
             margin = max(0.05, float(self.margin_edit.text()))
             expand = max(0.0, min(60.0, float(self.expand_edit.text())))
             fillet = max(0.0, float(self.fillet_edit.text()))
+            throat_r = max(0.0, float(self.throat_edit.text()))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             rgb, info = ed.rasterize_mask(
                 geom, self._nozzle(), engine_px=res, plume_factor=plume,
@@ -343,7 +351,7 @@ class DesignerTab(QWidget):
                 add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
                 enclose=self.enclose_chk.isChecked(),
                 half=self.half_chk.isChecked(), expand_deg=expand,
-                fillet_mm=fillet, analytic=True)
+                fillet_mm=fillet, throat_r_mm=throat_r, analytic=True)
             self._rgb, self._info = rgb, info
         except ValueError:
             rgb, info = self._rgb, self._info      # keep the last valid mask

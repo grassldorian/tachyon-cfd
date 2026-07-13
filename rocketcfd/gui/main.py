@@ -598,6 +598,18 @@ class MainWindow(QMainWindow):
             "(orange) and, when zoomed in, the cell edges.")
         self.mesh_chk.toggled.connect(self.on_mesh_toggled)
         bar.addWidget(self.mesh_chk)
+        bar.addWidget(QLabel("Overlay:"))
+        self.overlay_combo = QComboBox()
+        self.overlay_combo.addItems(["none", "streamlines", "vectors"])
+        self.overlay_combo.setToolTip(
+            "Draw the velocity field on top of the colour map:\n"
+            "  streamlines — curves tangent to the flow (plume, shear\n"
+            "     layers, recirculation),\n"
+            "  vectors — a coarse grid of direction/speed arrows.\n"
+            "Follows the current velocity snapshot; toggle off for a clean\n"
+            "field or faster redraws.")
+        self.overlay_combo.currentTextChanged.connect(self.refresh_view)
+        bar.addWidget(self.overlay_combo)
         self.btn_probe = QPushButton("Probe")
         self.btn_probe.setCheckable(True)
         self.btn_probe.setToolTip(
@@ -711,6 +723,14 @@ class MainWindow(QMainWindow):
         self.mesh_grid.setZValue(25)
         self.plot.addItem(self.mesh_grid)
         self.mesh_grid.hide()
+        # velocity overlay: streamline polylines or vector arrows, drawn as one
+        # PlotCurveItem with an explicit break array so many separate lines live
+        # in a single fast item
+        self.flow_overlay = pg.PlotCurveItem(
+            pen=pg.mkPen((255, 255, 255, 200), width=1))
+        self.flow_overlay.setZValue(28)
+        self.plot.addItem(self.flow_overlay)
+        self.flow_overlay.hide()
         self.vb.sigRangeChanged.connect(self._update_mesh_grid)
         self.mask_lam = None
         self.scalebar = None
@@ -1418,6 +1438,139 @@ class MainWindow(QMainWindow):
             self.img_item.setRect(rect)
         self.cbar.setColorMap(cmap)
         self.cbar.setLevels((lo, hi))
+        self._draw_flow_overlay()
+
+    def _draw_flow_overlay(self):
+        """Streamline / vector overlay of the velocity field, computed from the
+        snapshot's u,v components and drawn in world coordinates over the
+        colour map. One PlotCurveItem holds every line via a break array."""
+        mode = self.overlay_combo.currentText()
+        f = self.last_snap["fields"] if self.last_snap else None
+        if mode == "none" or f is None or "Velocity u [m/s]" not in f:
+            self.flow_overlay.hide()
+            return
+        # cache the integration: it depends only on the velocity snapshot and
+        # the mode, so switching field / colormap / levels must not recompute it
+        key = (id(self.last_snap), mode)
+        if getattr(self, "_overlay_key", None) != key:
+            u = np.asarray(f["Velocity u [m/s]"], dtype=float)
+            v = np.asarray(f["Velocity v [m/s]"], dtype=float)
+            if self._disp_idx is not None:           # match the displayed image
+                u = u[:, self._disp_idx]
+                v = v[:, self._disp_idx]
+            if mode == "streamlines":
+                xs, ys, conn = self._streamlines(u, v)
+            else:
+                xs, ys, conn = self._vectors(u, v)
+            self._overlay_key = key
+            self._overlay_data = (np.asarray(xs, float), np.asarray(ys, float),
+                                  np.asarray(conn, dtype=np.int32))
+        xs, ys, conn = self._overlay_data
+        if xs.size == 0:
+            self.flow_overlay.hide()
+            return
+        # cell-centred grid (i, j) -> world (x, y): x=(i+0.5)dx, y=(j+0.5)dx-y_off
+        self.flow_overlay.setData((xs + 0.5) * self.dx,
+                                  (ys + 0.5) * self.dx - self.y_off,
+                                  connect=conn)
+        self.flow_overlay.show()
+
+    @staticmethod
+    def _bilinear(u, v, fi, fj):
+        """Sample (u, v) at fractional grid index (fi across cols, fj rows);
+        returns (0, 0) if any corner is a wall (NaN) or out of bounds."""
+        ny, nx = u.shape
+        if fi < 0 or fi > nx - 1 or fj < 0 or fj > ny - 1:
+            return 0.0, 0.0
+        i0, j0 = int(fi), int(fj)
+        i1, j1 = min(i0 + 1, nx - 1), min(j0 + 1, ny - 1)
+        a, b = fi - i0, fj - j0
+        uu = (u[j0, i0], u[j0, i1], u[j1, i0], u[j1, i1])
+        vv = (v[j0, i0], v[j0, i1], v[j1, i0], v[j1, i1])
+        if any(np.isnan(uu)) or any(np.isnan(vv)):
+            return 0.0, 0.0
+        su = ((1 - a) * (1 - b) * uu[0] + a * (1 - b) * uu[1]
+              + (1 - a) * b * uu[2] + a * b * uu[3])
+        sv = ((1 - a) * (1 - b) * vv[0] + a * (1 - b) * vv[1]
+              + (1 - a) * b * vv[2] + a * b * vv[3])
+        return float(su), float(sv)
+
+    def _streamlines(self, u, v, n_seed_y=26, max_steps=600, step=0.7):
+        """Integrate streamlines (RK2) in grid-index space from a coarse column
+        of seeds, both up- and downstream. Returns flat (xs, ys, connect)."""
+        ny, nx = u.shape
+        speed = np.hypot(np.nan_to_num(u), np.nan_to_num(v))
+        vref = float(np.nanpercentile(speed[speed > 0], 90)) if np.any(speed > 0) else 1.0
+        vmin = 0.02 * max(vref, 1e-9)                # ignore near-stagnant cells
+        xs, ys, conn = [], [], []
+        # seed on a few columns spread across x, at rows spanning the height
+        seed_cols = np.linspace(0.06 * nx, 0.55 * nx, 5)
+        seed_rows = np.linspace(0.05 * ny, 0.95 * ny, n_seed_y)
+        for ci in seed_cols:
+            for rj in seed_rows:
+                su, sv = self._bilinear(u, v, ci, rj)
+                if su * su + sv * sv < vmin * vmin:
+                    continue
+                for direction in (1.0, -1.0):
+                    fi, fj = float(ci), float(rj)
+                    line_x, line_y = [], []
+                    for _ in range(max_steps):
+                        su, sv = self._bilinear(u, v, fi, fj)
+                        sp = math.hypot(su, sv)
+                        if sp < vmin:
+                            break
+                        # RK2 midpoint in grid space (dir (u,v) normalised)
+                        hi, hj = su / sp, sv / sp
+                        mu, mv = self._bilinear(u, v, fi + 0.5 * step * hi * direction,
+                                                fj + 0.5 * step * hj * direction)
+                        mp = math.hypot(mu, mv)
+                        if mp < vmin:
+                            break
+                        fi += step * (mu / mp) * direction
+                        fj += step * (mv / mp) * direction
+                        if not (0 <= fi <= nx - 1 and 0 <= fj <= ny - 1):
+                            break
+                        line_x.append(fi)
+                        line_y.append(fj)
+                    if len(line_x) > 3:
+                        xs.extend(line_x)
+                        ys.extend(line_y)
+                        conn.extend([1] * (len(line_x) - 1) + [0])
+        return xs, ys, conn
+
+    def _vectors(self, u, v, n_cols=44):
+        """Coarse grid of direction/speed arrows as line segments (shaft + two
+        head barbs). Returns flat (xs, ys, connect) with breaks between arrows."""
+        ny, nx = u.shape
+        speed = np.hypot(np.nan_to_num(u), np.nan_to_num(v))
+        vref = float(np.nanpercentile(speed[speed > 0], 92)) if np.any(speed > 0) else 1.0
+        vref = max(vref, 1e-9)
+        stride = max(2, int(round(nx / n_cols)))
+        L = 0.9 * stride                             # max arrow length in cells
+        xs, ys, conn = [], [], []
+        for j in range(stride // 2, ny, stride):
+            for i in range(stride // 2, nx, stride):
+                su, sv = u[j, i], v[j, i]
+                if np.isnan(su) or np.isnan(sv):
+                    continue
+                sp = math.hypot(su, sv)
+                if sp < 0.02 * vref:
+                    continue
+                scale = L * min(sp / vref, 1.0) / sp
+                dxc, dyc = su * scale, sv * scale
+                x1, y1 = i + dxc, j + dyc
+                # two short head barbs at 25 deg off the shaft
+                hx, hy = dxc, dyc
+                hl = 0.35
+                ca, sa = math.cos(2.62), math.sin(2.62)   # 150 deg
+                b1x = x1 + hl * (hx * ca - hy * sa)
+                b1y = y1 + hl * (hx * sa + hy * ca)
+                b2x = x1 + hl * (hx * ca + hy * sa)
+                b2y = y1 + hl * (-hx * sa + hy * ca)
+                xs.extend([i, x1, b1x, x1, b2x])
+                ys.extend([j, y1, b1y, y1, b2y])
+                conn.extend([1, 1, 0, 1, 0])
+        return xs, ys, conn
 
     def on_mouse_move(self, pos):
         if not self.last_snap:
