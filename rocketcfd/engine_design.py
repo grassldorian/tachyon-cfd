@@ -172,8 +172,60 @@ def optimize_geometry(prop: dict, pc: float, pa: float, target_thrust: float,
 # --------------------------------------------------------------------------- #
 #  Wall contour
 # --------------------------------------------------------------------------- #
-def build_contour(geom: dict, nozzle_type: str = "Conical (15°)"):
-    """Upper engine-wall contour (x, r) in mm, plus station keys."""
+def _round_corners(x, r, idxs, radius: float, n_arc: int = 16):
+    """Replace the sharp interior vertices in ``idxs`` with tangent circular
+    fillets of radius ``radius`` mm; every other vertex passes through
+    untouched. The tangent length is clamped to 45% of each adjoining segment,
+    so neighbouring fillets (the chamber corner and the throat) can never
+    overlap even at large radii, and the fillet degrades gracefully instead of
+    inverting the wall. Returns the resampled (x, r)."""
+    pts = np.column_stack([np.asarray(x, float), np.asarray(r, float)])
+    if radius <= 0.0:
+        return pts[:, 0], pts[:, 1]
+    want = {i for i in idxs if 0 < i < len(pts) - 1}
+    out = [pts[0]]
+    for j in range(1, len(pts) - 1):
+        V = pts[j]
+        if j not in want:
+            out.append(V)
+            continue
+        A, B = pts[j - 1], pts[j + 1]
+        u, w = A - V, B - V
+        lu, lw = float(np.hypot(*u)), float(np.hypot(*w))
+        if lu < 1e-9 or lw < 1e-9:
+            out.append(V)
+            continue
+        u, w = u / lu, w / lw
+        alpha = math.acos(float(np.clip(np.dot(u, w), -1.0, 1.0)))
+        if alpha < 1e-3 or alpha > math.pi - 1e-3:   # already straight
+            out.append(V)
+            continue
+        half = 0.5 * alpha
+        t = min(radius / math.tan(half), 0.45 * lu, 0.45 * lw)
+        reff = t * math.tan(half)                    # radius after clamping
+        T1, T2 = V + u * t, V + w * t
+        bis = u + w
+        bis = bis / float(np.hypot(*bis))
+        C = V + bis * (reff / math.sin(half))        # fillet-circle centre
+        a1 = math.atan2(T1[1] - C[1], T1[0] - C[0])
+        a2 = math.atan2(T2[1] - C[1], T2[0] - C[0])
+        da = (a2 - a1 + math.pi) % (2.0 * math.pi) - math.pi   # short way
+        ang = a1 + da * np.linspace(0.0, 1.0, n_arc)
+        out.extend(np.column_stack([C[0] + reff * np.cos(ang),
+                                    C[1] + reff * np.sin(ang)]))
+    out.append(pts[-1])
+    P = np.asarray(out, dtype=float)
+    return P[:, 0], P[:, 1]
+
+
+def build_contour(geom: dict, nozzle_type: str = "Conical (15°)",
+                  fillet_mm: float = 0.0):
+    """Upper engine-wall contour (x, r) in mm, plus station keys.
+
+    ``fillet_mm`` > 0 rounds the two structural corners — the chamber /
+    converging-cone junction and (conical only) the throat — with tangent
+    circular fillets of that radius. Rao/Bell nozzles already carry a smooth
+    tangent throat arc, so only their chamber corner is rounded."""
     lc = geom["chamber_l"] * 1000.0
     dc = geom["chamber_d"] * 1000.0
     ln = geom["nozzle_l"] * 1000.0
@@ -188,10 +240,14 @@ def build_contour(geom: dict, nozzle_type: str = "Conical (15°)"):
         x = np.concatenate([[x0, x1], x2 + xb])
         r = np.concatenate([[rc, rc], rb])
         x3 = x[-1]
+        corner_idx = [1]                       # throat is a tangent arc already
     else:
         x3 = lc + l_conv + ln
         x = np.array([x0, x1, x2, x3])
         r = np.array([rc, rc, rt, re])
+        corner_idx = [1, 2]                     # chamber junction + sharp throat
+    if fillet_mm > 0.0 and l_conv > 1e-6:
+        x, r = _round_corners(x, r, corner_idx, fillet_mm)
     return x, r, dict(x_inj=x0, x_chend=x1, x_throat=x2, x_exit=x3,
                       rc=rc, rt=rt, re=re)
 
@@ -242,7 +298,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
                    wall_mm: float | None = None, add_inlet: bool = True,
                    inlet_frac: float = 0.75, analytic: bool = False,
                    enclose: bool = True, half: bool = False,
-                   expand_deg: float = 0.0):
+                   expand_deg: float = 0.0, fillet_mm: float = 0.0):
     """Render the engine as a Tachyon mask image (full axisymmetric section).
 
     Returns (rgb uint8 array (H, W, 3), info dict). ``info`` carries
@@ -255,7 +311,7 @@ def rasterize_mask(geom: dict, nozzle_type: str = "Conical (15°)", *,
     """
     from PIL import Image, ImageDraw
 
-    x, r, key = build_contour(geom, nozzle_type)
+    x, r, key = build_contour(geom, nozzle_type, fillet_mm=fillet_mm)
     L = float(key["x_exit"])                       # engine length [mm]
     rc, rt, re = key["rc"], key["rt"], key["re"]
     rmax = max(rc, re)

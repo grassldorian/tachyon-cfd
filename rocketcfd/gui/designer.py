@@ -101,6 +101,17 @@ class DesignerTab(QWidget):
         self.nozzle_combo.addItems(["Conical (15°)", "Bell (Rao 80%)"])
         self.nozzle_combo.currentIndexChanged.connect(self._schedule)
         gf.addRow("Nozzle", self.nozzle_combo)
+        self.fillet_edit = StepLineEdit("0", step=0.5, minimum=0.0, decimals=1)
+        self.fillet_edit.textChanged.connect(self._schedule)
+        self.fillet_edit.setToolTip(
+            "Round the two hard corners — the chamber-to-nozzle contraction\n"
+            "and (conical only) the throat — with a tangent fillet of this\n"
+            "radius (mm). 0 = sharp. Smooths the wall so the flow turns\n"
+            "gradually (less corner separation, a cleaner throat). A large\n"
+            "fillet slightly widens the effective throat. Bell nozzles already\n"
+            "have a smooth tangent throat arc, so only their chamber corner\n"
+            "is rounded.  ↑ / ↓: ±0.5 mm  (Shift ±5, Ctrl ±0.05)")
+        gf.addRow("Corner fillet [mm]", self.fillet_edit)
         ll.addWidget(geo)
 
         op = QGroupBox("Operating point")
@@ -233,6 +244,7 @@ class DesignerTab(QWidget):
             plume = max(0.2, float(self.plume_edit.text()))
             margin = max(0.05, float(self.margin_edit.text()))
             expand = max(0.0, min(60.0, float(self.expand_edit.text())))
+            fillet = max(0.0, float(self.fillet_edit.text()))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             pc = float(self.pc_edit.text()) * 1e5
             pa = ed.ambient_pressure(float(self.alt_edit.text()))
@@ -256,7 +268,8 @@ class DesignerTab(QWidget):
             margin_factor=margin,
             add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
             enclose=self.enclose_chk.isChecked(),
-            half=self.half_chk.isChecked(), expand_deg=expand)
+            half=self.half_chk.isChecked(), expand_deg=expand,
+            fillet_mm=fillet)
         self._rgb, self._info = rgb, info
 
         self._show_preview(rgb)
@@ -322,6 +335,7 @@ class DesignerTab(QWidget):
             plume = max(0.2, float(self.plume_edit.text()))
             margin = max(0.05, float(self.margin_edit.text()))
             expand = max(0.0, min(60.0, float(self.expand_edit.text())))
+            fillet = max(0.0, float(self.fillet_edit.text()))
             inlet_frac = max(5.0, min(98.0, float(self.inlet_edit.text()))) / 100.0
             rgb, info = ed.rasterize_mask(
                 geom, self._nozzle(), engine_px=res, plume_factor=plume,
@@ -329,7 +343,7 @@ class DesignerTab(QWidget):
                 add_inlet=self.inlet_chk.isChecked(), inlet_frac=inlet_frac,
                 enclose=self.enclose_chk.isChecked(),
                 half=self.half_chk.isChecked(), expand_deg=expand,
-                analytic=True)
+                fillet_mm=fillet, analytic=True)
             self._rgb, self._info = rgb, info
         except ValueError:
             rgb, info = self._rgb, self._info      # keep the last valid mask
