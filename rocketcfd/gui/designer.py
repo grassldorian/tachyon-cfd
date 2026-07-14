@@ -72,6 +72,7 @@ class DesignerTab(QWidget):
         self.edits: dict[str, QLineEdit] = {}
         self._rgb = None
         self._info = None
+        self._grid = None
         self._build()
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -200,6 +201,36 @@ class DesignerTab(QWidget):
         mf.addRow("Inlet Ø [% chamber]", self.inlet_edit)
         ll.addWidget(msk)
 
+        grp = QGroupBox("Body-fitted grid (overset)")
+        gg = QFormLayout(grp)
+        self.grid_chk = QCheckBox("Preview body-fitted wall grid")
+        self.grid_chk.setToolTip(
+            "Overset Phase 1: show a structured boundary-layer grid clustered\n"
+            "at the wall (marched along inward surface normals) instead of the\n"
+            "Cartesian mask. This is the near-body grid that would overlap the\n"
+            "Cartesian background in the full overset scheme. Preview only —\n"
+            "'Send to solver' still sends the Cartesian mask.")
+        self.grid_chk.toggled.connect(self._schedule)
+        gg.addRow(self.grid_chk)
+        self.grid_neta = StepLineEdit("30", step=2.0, minimum=4.0, decimals=0)
+        self.grid_neta.textChanged.connect(self._schedule)
+        self.grid_neta.setToolTip("Number of cells normal to the wall (layers).")
+        gg.addRow("Wall-normal cells", self.grid_neta)
+        self.grid_first = StepLineEdit("8", step=1.0, minimum=0.05, decimals=2)
+        self.grid_first.textChanged.connect(self._schedule)
+        self.grid_first.setToolTip(
+            "First cell height at the wall [µm]. Smaller = finer boundary layer\n"
+            "(lower y+). y+≈1 wall-resolved needs ~0.2 µm for a hot-gas rocket\n"
+            "wall; ~10 µm sits in the wall-function range.")
+        gg.addRow("First cell [µm]", self.grid_first)
+        self.grid_growth = StepLineEdit("1.12", step=0.01, minimum=1.001,
+                                        decimals=3)
+        self.grid_growth.textChanged.connect(self._schedule)
+        self.grid_growth.setToolTip("Geometric growth ratio of the cell height "
+                                    "away from the wall.")
+        gg.addRow("Growth ratio", self.grid_growth)
+        ll.addWidget(grp)
+
         self.btn_send = QPushButton("Send to solver  →")
         self.btn_send.setProperty("accent", True)
         self.btn_send.clicked.connect(self.send)
@@ -279,6 +310,10 @@ class DesignerTab(QWidget):
             fillet_mm=fillet, throat_r_mm=throat_r)
         self._rgb, self._info = rgb, info
 
+        if self.grid_chk.isChecked():
+            self._grid_preview(geom, nozzle, fillet, throat_r)
+            return
+
         self._show_preview(rgb)
         self.caption.setText(
             f"mask {info['nx']}×{info['ny']} cells · "
@@ -306,9 +341,77 @@ class DesignerTab(QWidget):
                        Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.preview.setPixmap(pm)
 
+    # ------------------------------------------------- body-fitted grid preview
+    def _grid_preview(self, geom, nozzle, fillet, throat_r):
+        """Generate + draw the overset near-body boundary-layer grid on the
+        current wall contour, with quality metrics."""
+        from .. import overset
+        try:
+            n_eta = max(4, int(float(self.grid_neta.text())))
+            first = max(0.05, float(self.grid_first.text())) * 1e-6
+            growth = min(max(float(self.grid_growth.text()), 1.001), 1.6)
+        except ValueError:
+            return
+        x_mm, r_mm, _ = ed.build_contour(geom, nozzle, fillet_mm=fillet,
+                                         throat_r_mm=throat_r)
+        try:
+            g = overset.wall_normal_grid(x_mm * 1e-3, r_mm * 1e-3, n_eta=n_eta,
+                                         first_cell=first, growth=growth,
+                                         n_xi=220, smooth_normals=4)
+        except Exception as exc:                          # noqa: BLE001
+            self.caption.setText(f"grid error: {exc}")
+            return
+        self._grid = g
+        self._render_grid_pixmap(g)
+        nu, u_tau = 1.0e-4 / 5.0, 95.0
+        yp = g["first_cell"] * u_tau / nu
+        self.caption.setText(
+            f"body-fitted grid {g['n_xi']}×{g['n_eta']+1} · first "
+            f"{g['first_cell']*1e6:.2f} µm · thickness {g['thickness']*1e3:.2f} mm"
+            f" · wall y+ ≈ {yp:.0f}")
+        warn = "" if g["folded_cells"] == 0 else "   ⚠ FOLDED"
+        y1 = overset.first_cell_for_yplus(1.0, u_tau, nu) * 1e6
+        self.perf.setText(
+            f"folded cells    {g['folded_cells']}{warn}\n"
+            f"min orthogon.   {g['min_orthogonality_deg']:6.1f}°\n"
+            f"min cell area   {g['min_cell_area']:.2e} m²\n"
+            f"growth ratio    {g['growth']:.3f}\n"
+            f"y+=1 first cell {y1:.3f} µm  (wall-resolved target)")
+
+    def _render_grid_pixmap(self, g):
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        X, R = g["X"], g["R"]
+        av = self.preview.size()
+        w, h = max(av.width(), 400), max(av.height(), 300)
+        fig = Figure(figsize=(w / 100.0, h / 100.0), dpi=100)
+        fig.patch.set_alpha(0.0)
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_facecolor("none")
+        for sgn in (1, -1):
+            for j in range(X.shape[1]):
+                ax.plot(X[:, j], sgn * R[:, j], "-", color="#4a90d9",
+                        lw=0.4, alpha=0.85)
+            for i in range(0, X.shape[0], 4):
+                ax.plot(X[i, :], sgn * R[i, :], "-", color="#4a90d9",
+                        lw=0.4, alpha=0.85)
+            ax.plot(g["xw"], sgn * g["rw"], "-", color="#e74c3c", lw=1.3)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        ax.margins(0.03)
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        ww, hh = canvas.get_width_height()
+        img = QImage(bytes(canvas.buffer_rgba()), ww, hh,
+                     QImage.Format_RGBA8888)
+        self.preview.setPixmap(QPixmap.fromImage(img).scaled(
+            self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
     def resizeEvent(self, ev):                       # rescale preview to fit
         super().resizeEvent(ev)
-        if self._rgb is not None:
+        if self.grid_chk.isChecked() and self._grid is not None:
+            self._render_grid_pixmap(self._grid)
+        elif self._rgb is not None:
             self._show_preview(self._rgb)
 
     # ------------------------------------------------------------ actions

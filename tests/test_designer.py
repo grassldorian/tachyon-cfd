@@ -134,4 +134,18 @@ QTest.keyClick(e, Qt.Key_Up, Qt.ShiftModifier)
 assert e.text() == "39", e.text()
 print("arrow-key stepping OK")
 
+# 5. body-fitted grid preview (overset Phase 1): toggling it generates a valid
+#    near-body grid and draws it into the preview
+d.grid_neta.setText("28")
+d.grid_first.setText("6")
+d.grid_growth.setText("1.13")
+d.grid_chk.setChecked(True)
+d._refresh()
+assert d._grid is not None and d._grid["folded_cells"] == 0, "grid preview failed"
+assert not d.preview.pixmap().isNull(), "grid pixmap not drawn"
+d.grid_chk.setChecked(False)                         # back to mask preview
+d._refresh()
+print(f"body-fitted grid preview OK ({d._grid['n_xi']}x{d._grid['n_eta']+1}, "
+      f"orth {d._grid['min_orthogonality_deg']:.0f} deg)")
+
 print("designer OK")
