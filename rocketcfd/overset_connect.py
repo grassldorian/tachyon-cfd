@@ -80,9 +80,14 @@ class OversetConnectivity:
                         return i, j, min(max(s, 0.0), 1.0), min(max(t, 0.0), 1.0)
         return None
 
+    @staticmethod
+    def _w(s, t):
+        return ((1 - s) * (1 - t), s * (1 - t), s * t, (1 - s) * t)
+
     # ------------------------------------------------------------- build maps
     def _build(self, blank_frac, fringe_layers):
         blank = np.full((self.ncx, self.ncy), SOLVE, np.uint8)
+        hole_idx, hole_don = [], []
         # eta-fraction (0 at wall .. 1 at outer edge) of each located cartesian
         # cell; below blank_frac the near-body grid is authoritative -> hole
         for ci in range(self.ncx):
@@ -90,9 +95,11 @@ class OversetConnectivity:
                 loc = self.locate_body(self.ccx[ci], self.ccy[cj])
                 if loc is None:
                     continue
-                _, j, _, t = loc
+                i, j, s, t = loc
                 if (j + t) / (self.Nbj - 1) < blank_frac:
                     blank[ci, cj] = HOLE
+                    hole_idx.append((ci, cj))
+                    hole_don.append((i, j, self._w(s, t)))
         # fringe = SOLVE cells 4-adjacent to a hole
         h = blank == HOLE
         adj = np.zeros_like(h)
@@ -112,11 +119,13 @@ class OversetConnectivity:
             i, j, s, t = loc
             blank[ci, cj] = FRINGE
             fr_idx.append((ci, cj))
-            self.fr_don.append((i, j,
-                                ((1 - s) * (1 - t), s * (1 - t),
-                                 s * t, (1 - s) * t)))
+            self.fr_don.append((i, j, self._w(s, t)))
         self.fr_idx = np.array(fr_idx, int).reshape(-1, 2)
         self.blank = blank
+        # all cartesian cells that receive from the body grid (hole + fringe):
+        # imposing every one each step protects the background solve region
+        self.recv_idx = np.array(hole_idx + fr_idx, int).reshape(-1, 2)
+        self.recv_don = hole_don + self.fr_don
 
         # ---- receptors on the body outer edge (from cartesian) ----
         j_recv = range(max(self.Nbj - fringe_layers, 1), self.Nbj)
@@ -139,6 +148,16 @@ class OversetConnectivity:
         f = np.asarray(body_field)
         out = np.empty(len(self.fr_don), f.dtype)
         for n, (i, j, w) in enumerate(self.fr_don):
+            out[n] = (w[0] * f[i, j] + w[1] * f[i + 1, j]
+                      + w[2] * f[i + 1, j + 1] + w[3] * f[i, j + 1])
+        return out
+
+    def interp_to_cart_recv(self, body_field):
+        """Sample a body field at every cartesian receptor (hole + fringe).
+        Aligned with ``self.recv_idx``."""
+        f = np.asarray(body_field)
+        out = np.empty(len(self.recv_don), f.dtype)
+        for n, (i, j, w) in enumerate(self.recv_don):
             out[n] = (w[0] * f[i, j] + w[1] * f[i + 1, j]
                       + w[2] * f[i + 1, j + 1] + w[3] * f[i, j + 1])
         return out
