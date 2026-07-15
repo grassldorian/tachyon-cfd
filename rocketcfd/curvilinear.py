@@ -36,6 +36,22 @@ class CurvilinearEuler:
         self.bc = dict(imin="extrap", imax="extrap",
                        jmin="extrap", jmax="extrap")
         self.bc_state = {}
+        # viscous / turbulent (laminar Navier-Stokes; mu_t is an externally
+        # supplied eddy viscosity so a turbulence model plugs in as mu+mu_t)
+        self.viscous = False
+        self.mu = 0.0
+        self.Pr = 0.72
+        self.Rgas = 287.0
+        self.mu_t = None
+        self.wall_vel = {}
+
+    def set_viscous(self, mu, Pr=0.72, Rgas=287.0, mu_t=None):
+        self.viscous = True
+        self.mu = float(mu)
+        self.Pr = float(Pr)
+        self.Rgas = float(Rgas)
+        self.mu_t = mu_t                                 # (ncx,ncy) cell field
+        return self
 
     # ------------------------------------------------------------------ grid
     def _extend_grid(self, Xn, Rn):
@@ -118,12 +134,16 @@ class CurvilinearEuler:
             self._fill(lo)
             self._fill(hi)
 
+    def set_wall_velocity(self, side, uw, vw=0.0):
+        self.wall_vel[side] = (float(uw), float(vw))
+        return self
+
     def _fill(self, side):
         g, U = self.ng, self.U
         nx, ny = self.ncx, self.ncy
         kind = self.bc[side]
-        if kind == "slipwall":
-            self._slipwall(side)
+        if kind in ("slipwall", "noslip"):
+            self._wall(side, slip=(kind == "slipwall"))
             return
         fixed = kind == "fixed"
         val = (self._cons_from_prim(*self.bc_state[side])[:, None, None]
@@ -137,28 +157,37 @@ class CurvilinearEuler:
         elif side == "jmax":
             U[:, :, ny - g:] = val if fixed else U[:, :, ny - g - 1:ny - g]
 
-    def _slipwall(self, side):
+    def _wall(self, side, slip):
+        """Slip (reflect normal velocity) or no-slip (ghost velocity so the wall
+        face carries the wall velocity) j-wall; internal energy is mirrored
+        (adiabatic), only the kinetic part is rebuilt. i-walls fall back to
+        extrapolation."""
         g, U = self.ng, self.U
         ny = self.ncy
         if side == "jmin":
             face, interior, dst = g, U[:, :, g:2 * g][:, :, ::-1], slice(0, g)
-            Sx, Sy = self.Sxj[:, face], self.Syj[:, face]
         elif side == "jmax":
             face = ny - g
             interior, dst = U[:, :, ny - 2 * g:ny - g][:, :, ::-1], slice(ny - g, ny)
-            Sx, Sy = self.Sxj[:, face], self.Syj[:, face]
-        else:                                            # i-walls: extrap
+        else:
             self.bc[side] = "extrap"; self._fill(side); return
+        Sx, Sy = self.Sxj[:, face], self.Syj[:, face]
         nl = np.hypot(Sx, Sy)
         nx = (Sx / np.maximum(nl, 1e-30))[:, None]
         ny_ = (Sy / np.maximum(nl, 1e-30))[:, None]
         rho = interior[0]
         u, v = interior[1] / rho, interior[2] / rho
-        un = u * nx + v * ny_
+        if slip:
+            un = u * nx + v * ny_
+            u2, v2 = u - 2 * un * nx, v - 2 * un * ny_
+        else:
+            uw, vw = self.wall_vel.get(side, (0.0, 0.0))
+            u2, v2 = 2 * uw - u, 2 * vw - v       # face velocity -> wall velocity
+        ei = interior[3] - 0.5 * rho * (u * u + v * v)
         U[0][:, dst] = rho
-        U[1][:, dst] = rho * (u - 2 * un * nx)
-        U[2][:, dst] = rho * (v - 2 * un * ny_)
-        U[3][:, dst] = interior[3]
+        U[1][:, dst] = rho * u2
+        U[2][:, dst] = rho * v2
+        U[3][:, dst] = ei + 0.5 * rho * (u2 * u2 + v2 * v2)
 
     # ------------------------------------------------------------- HLLC flux
     def _hllc(self, WL, WR, nx, ny):
@@ -215,6 +244,79 @@ class CurvilinearEuler:
         WR = W[tuple(b)] - 0.5 * s[tuple(b)]
         return WL, WR
 
+    # ------------------------------------------------------ viscous (laminar)
+    def _grad(self, phi):
+        """Green-Gauss cell-centred gradient of a cell field (ghosts filled)."""
+        gx = np.zeros_like(phi)
+        gy = np.zeros_like(phi)
+        pfi = 0.5 * (phi[:-1, :] + phi[1:, :])           # i-interfaces
+        gxi, gyi = pfi * self.Sxi[1:-1], pfi * self.Syi[1:-1]
+        gx[1:-1, :] += gxi[1:, :] - gxi[:-1, :]
+        gy[1:-1, :] += gyi[1:, :] - gyi[:-1, :]
+        pfj = 0.5 * (phi[:, :-1] + phi[:, 1:])           # j-interfaces
+        gxj, gyj = pfj * self.Sxj[:, 1:-1], pfj * self.Syj[:, 1:-1]
+        gx[:, 1:-1] += gxj[:, 1:] - gxj[:, :-1]
+        gy[:, 1:-1] += gyj[:, 1:] - gyj[:, :-1]
+        gx /= self.vol
+        gy /= self.vol
+        gx[0], gx[-1] = gx[1], gx[-2]
+        gy[0], gy[-1] = gy[1], gy[-2]
+        gx[:, 0], gx[:, -1] = gx[:, 1], gx[:, -2]
+        gy[:, 0], gy[:, -1] = gy[:, 1], gy[:, -2]
+        return gx, gy
+
+    def _face_grad(self, phi, gx, gy, axis):
+        """Corrected face gradient (averaged cell gradient with its face-normal
+        component replaced by the direct difference -> no odd/even decoupling)."""
+        if axis == 0:
+            pL, pR = phi[:-1, :], phi[1:, :]
+            gaX, gaY = 0.5 * (gx[:-1, :] + gx[1:, :]), 0.5 * (gy[:-1, :] + gy[1:, :])
+            eX = self.cx[1:, :] - self.cx[:-1, :]
+            eY = self.cy[1:, :] - self.cy[:-1, :]
+        else:
+            pL, pR = phi[:, :-1], phi[:, 1:]
+            gaX, gaY = 0.5 * (gx[:, :-1] + gx[:, 1:]), 0.5 * (gy[:, :-1] + gy[:, 1:])
+            eX = self.cx[:, 1:] - self.cx[:, :-1]
+            eY = self.cy[:, 1:] - self.cy[:, :-1]
+        corr = ((pR - pL) - (gaX * eX + gaY * eY)) / np.maximum(eX * eX + eY * eY, 1e-30)
+        return gaX + corr * eX, gaY + corr * eY
+
+    def _mu_eff(self, rho):
+        m = np.full(rho.shape, self.mu, float)
+        if self.mu_t is not None:
+            m = m + self.mu_t
+        return m
+
+    def _viscous_fluxes(self, rho, u, v, p):
+        T = p / (np.maximum(rho, 1e-9) * self.Rgas)
+        gux, guy = self._grad(u)
+        gvx, gvy = self._grad(v)
+        gTx, gTy = self._grad(T)
+        mueff = self._mu_eff(rho)
+        cp = self.gamma * self.Rgas / (self.gamma - 1.0)
+        res = []
+        faces = ((0, (self.Sxi[1:-1], self.Syi[1:-1])),
+                 (1, (self.Sxj[:, 1:-1], self.Syj[:, 1:-1])))
+        for axis, (Sx, Sy) in faces:
+            ux, uy = self._face_grad(u, gux, guy, axis)
+            vx, vy = self._face_grad(v, gvx, gvy, axis)
+            Tx, Ty = self._face_grad(T, gTx, gTy, axis)
+            fa = (lambda q: 0.5 * (q[:-1, :] + q[1:, :])) if axis == 0 else \
+                 (lambda q: 0.5 * (q[:, :-1] + q[:, 1:]))
+            mf, uf, vf = fa(mueff), fa(u), fa(v)
+            dvg = ux + vy
+            txx = mf * (2.0 * ux - 2.0 / 3.0 * dvg)
+            tyy = mf * (2.0 * vy - 2.0 / 3.0 * dvg)
+            txy = mf * (uy + vx)
+            kap = cp * mf / self.Pr
+            Fmx = txx * Sx + txy * Sy
+            Fmy = txy * Sx + tyy * Sy
+            Fe = ((uf * txx + vf * txy) * Sx + (uf * txy + vf * tyy) * Sy
+                  + kap * (Tx * Sx + Ty * Sy))
+            res.append(np.stack([np.zeros_like(Fmx), Fmx, Fmy, Fe]))
+        return res[0], res[1]
+
+    # --------------------------------------------------------------- residual
     def _rhs(self, U):
         rho, u, v, p = self.primitives(U)
         W = np.stack([rho, u, v, p])
@@ -228,20 +330,36 @@ class CurvilinearEuler:
         Sj = self.Sxj[:, 1:-1], self.Syj[:, 1:-1]
         nlj = np.hypot(*Sj)
         Fj = self._hllc(WLj, WRj, Sj[0] / nlj, Sj[1] / nlj) * nlj
+        if self.viscous:                                 # subtract diffusive flux
+            Fvi, Fvj = self._viscous_fluxes(rho, u, v, p)
+            Fi = Fi - Fvi
+            Fj = Fj - Fvj
         div = np.zeros_like(U)
         div[:, 1:-1, :] += Fi[:, 1:, :] - Fi[:, :-1, :]
         div[:, :, 1:-1] += Fj[:, :, 1:] - Fj[:, :, :-1]
         return -div / np.maximum(self.vol, 1e-30)
 
     def max_wave_dt(self, cfl):
+        # only real cells constrain the step; ghost cells may be stale (e.g.
+        # uninitialised before the first BC fill), which would poison a global min
+        ii, jj = self.ii, self.jj
         rho, u, v, p = self.primitives()
+        rho, u, v, p = rho[ii, jj], u[ii, jj], v[ii, jj], p[ii, jj]
         a = np.sqrt(self.gamma * p / rho)
         si = 0.5 * (np.hypot(self.Sxi[1:], self.Syi[1:])
-                    + np.hypot(self.Sxi[:-1], self.Syi[:-1]))
+                    + np.hypot(self.Sxi[:-1], self.Syi[:-1]))[ii, jj]
         sj = 0.5 * (np.hypot(self.Sxj[:, 1:], self.Syj[:, 1:])
-                    + np.hypot(self.Sxj[:, :-1], self.Syj[:, :-1]))
+                    + np.hypot(self.Sxj[:, :-1], self.Syj[:, :-1]))[ii, jj]
+        vol = self.vol[ii, jj]
         rad = (np.hypot(u, v) + a) * (si + sj)
-        return cfl * float(np.min(self.vol / np.maximum(rad, 1e-30)))
+        dt = cfl * float(np.min(vol / np.maximum(rad, 1e-30)))
+        if self.viscous:                                 # viscous stability
+            mut = self.mu_t[ii, jj] if self.mu_t is not None else 0.0
+            nu = (self.mu + mut) / rho
+            dtv = 0.25 * float(np.min(vol ** 2 / np.maximum(
+                nu * (si * si + sj * sj), 1e-30)))
+            dt = min(dt, dtv)
+        return dt
 
     def step(self, dt):
         U0 = self.U.copy()
