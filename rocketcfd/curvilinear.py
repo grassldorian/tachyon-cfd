@@ -22,6 +22,17 @@ def _minmod(a, b):
     return np.where(a * b > 0.0, np.where(np.abs(a) < np.abs(b), a, b), 0.0)
 
 
+# --------------------------------------------------------------------------- #
+#  Menter k-omega SST constants (same set as the GPU Cartesian solver)
+# --------------------------------------------------------------------------- #
+_BSTAR = 0.09
+_SIGK1, _SIGK2 = 0.85, 1.0
+_SIGW1, _SIGW2 = 0.5, 0.856
+_BET1, _BET2 = 0.075, 0.0828
+_GAM1, _GAM2 = 0.5532, 0.4404
+_A1 = 0.31
+
+
 class CurvilinearEuler:
     def __init__(self, Xn, Rn, gamma: float = 1.4, ng: int = 2):
         self.gamma = float(gamma)
@@ -44,6 +55,11 @@ class CurvilinearEuler:
         self.Rgas = 287.0
         self.mu_t = None
         self.wall_vel = {}
+        # k-omega SST
+        self.turb = False
+        self.Ut = None                                   # (2,ncx,ncy) rho*k,rho*w
+        self.wd = None                                   # wall distance field
+        self.Prt = 0.9
 
     def set_viscous(self, mu, Pr=0.72, Rgas=287.0, mu_t=None):
         self.viscous = True
@@ -52,6 +68,103 @@ class CurvilinearEuler:
         self.Rgas = float(Rgas)
         self.mu_t = mu_t                                 # (ncx,ncy) cell field
         return self
+
+    # ------------------------------------------------------------ k-omega SST
+    def set_turbulence(self, wall_dist, k0=1.0e-6, w0=10.0):
+        """Enable Menter k-omega SST. ``wall_dist`` is the cell-centred distance
+        to the nearest wall (on the near-body grid this is just the eta
+        distance); k0/w0 seed the field."""
+        if not self.viscous:
+            raise ValueError("enable set_viscous() before set_turbulence()")
+        self.turb = True
+        self.wd = np.maximum(np.asarray(wall_dist, float), 1e-12)
+        rho = np.maximum(self.U[0], 1e-9)
+        self.Ut = np.stack([rho * k0, rho * w0])
+        self._update_mut()
+        return self
+
+    def _turb_prim(self, Ut=None):
+        Ut = self.Ut if Ut is None else Ut
+        rho = np.maximum(self.U[0], 1e-9)
+        k = np.maximum(Ut[0] / rho, 1e-14)
+        w = np.maximum(Ut[1] / rho, 1e-3)
+        return rho, k, w
+
+    def _strain(self, u, v):
+        gux, guy = self._grad(u)
+        gvx, gvy = self._grad(v)
+        S2 = 2.0 * (gux * gux + gvy * gvy) + (guy + gvx) ** 2
+        return S2
+
+    def _update_mut(self, Ut=None):
+        """Eddy viscosity mu_t = rho a1 k / max(a1 w, S F2) and the F2 limiter."""
+        rho, k, w = self._turb_prim(Ut)
+        _, u, v, _ = self.primitives()
+        S2 = self._strain(u, v)
+        d = self.wd
+        nu = self.mu / rho
+        t1 = np.sqrt(k) / (_BSTAR * w * d)
+        t2 = 500.0 * nu / (d * d * w)
+        arg2 = np.minimum(np.maximum(2.0 * t1, t2), 1.0e3)
+        F2 = np.tanh(arg2 * arg2)
+        self.mu_t = rho * _A1 * k / np.maximum(_A1 * w, np.sqrt(S2) * F2)
+        self._S2 = S2
+        return self.mu_t
+
+    def _blend_F1(self, rho, k, w):
+        gkx, gky = self._grad(k)
+        gwx, gwy = self._grad(w)
+        d = self.wd
+        nu = self.mu / rho
+        t1 = np.sqrt(k) / (_BSTAR * w * d)
+        t2 = 500.0 * nu / (d * d * w)
+        dkdw = gkx * gwx + gky * gwy
+        CDkw = np.maximum(2.0 * rho * _SIGW2 / w * dkdw, 1.0e-20)
+        arg1 = np.minimum(np.minimum(np.maximum(t1, t2),
+                                     4.0 * rho * _SIGW2 * k / (CDkw * d * d)),
+                          1.0e3)
+        F1 = np.tanh(arg1 ** 4)
+        return F1, (gkx, gky), (gwx, gwy), dkdw
+
+    def _turb_rhs(self, Ut, Fim, Fjm):
+        """d(rho k, rho w)/dt: convection on the HLLC mass flux, SST diffusion,
+        production and cross-diffusion. Destruction is point-implicit in _step."""
+        rho, k, w = self._turb_prim(Ut)
+        F1, gk, gw, dkdw = self._blend_F1(rho, k, w)
+        mut = self.mu_t
+        sigk = F1 * _SIGK1 + (1.0 - F1) * _SIGK2
+        sigw = F1 * _SIGW1 + (1.0 - F1) * _SIGW2
+        gamc = F1 * _GAM1 + (1.0 - F1) * _GAM2
+
+        div = np.zeros_like(Ut)
+        for axis, (Sx, Sy), Fm in ((0, (self.Sxi[1:-1], self.Syi[1:-1]), Fim),
+                                   (1, (self.Sxj[:, 1:-1], self.Syj[:, 1:-1]), Fjm)):
+            fa = (lambda q: 0.5 * (q[:-1, :] + q[1:, :])) if axis == 0 else \
+                 (lambda q: 0.5 * (q[:, :-1] + q[:, 1:]))
+            up = (lambda q: np.where(Fm > 0.0, q[:-1, :], q[1:, :])) if axis == 0 \
+                else (lambda q: np.where(Fm > 0.0, q[:, :-1], q[:, 1:]))
+            # convection (mass-flux upwind) minus SST diffusion
+            kfx, kfy = self._face_grad(k, gk[0], gk[1], axis)
+            wfx, wfy = self._face_grad(w, gw[0], gw[1], axis)
+            dk = (self.mu + fa(sigk) * fa(mut)) * (kfx * Sx + kfy * Sy)
+            dw = (self.mu + fa(sigw) * fa(mut)) * (wfx * Sx + wfy * Sy)
+            Fk = Fm * up(k) - dk
+            Fw = Fm * up(w) - dw
+            if axis == 0:
+                div[0, 1:-1, :] += Fk[1:, :] - Fk[:-1, :]
+                div[1, 1:-1, :] += Fw[1:, :] - Fw[:-1, :]
+            else:
+                div[0, :, 1:-1] += Fk[:, 1:] - Fk[:, :-1]
+                div[1, :, 1:-1] += Fw[:, 1:] - Fw[:, :-1]
+        out = -div / np.maximum(self.vol, 1e-30)
+        # production (limited as in the GPU solver) + cross-diffusion
+        S2 = np.minimum(self._S2, 10.0 * _BSTAR * rho * k * w
+                        / np.maximum(mut, 1e-12))
+        CD = 2.0 * (1.0 - F1) * rho * _SIGW2 / w * dkdw
+        out[0] += mut * S2
+        out[1] += gamc * rho * S2 + CD
+        self._F1 = F1
+        return out
 
     # ------------------------------------------------------------------ grid
     def _extend_grid(self, Xn, Rn):
@@ -334,6 +447,7 @@ class CurvilinearEuler:
             Fvi, Fvj = self._viscous_fluxes(rho, u, v, p)
             Fi = Fi - Fvi
             Fj = Fj - Fvj
+        self._Fim, self._Fjm = Fi[0], Fj[0]              # mass flux (for k/omega)
         div = np.zeros_like(U)
         div[:, 1:-1, :] += Fi[:, 1:, :] - Fi[:, :-1, :]
         div[:, :, 1:-1] += Fj[:, :, 1:] - Fj[:, :, :-1]
@@ -361,16 +475,86 @@ class CurvilinearEuler:
             dt = min(dt, dtv)
         return dt
 
+    # ------------------------------------------------- turbulence BC / update
+    def _turb_wall(self, side):
+        """Smooth-wall SST: k -> 0, omega -> Menter's 60 nu / (beta1 y1^2)."""
+        g, T, ny = self.ng, self.Ut, self.ncy
+        rho = np.maximum(self.U[0], 1e-9)
+        if side == "jmin":
+            dst, first = slice(0, g), g
+        elif side == "jmax":
+            dst, first = slice(ny - g, ny), ny - g - 1
+        else:
+            return
+        nu = self.mu / rho[:, first]
+        d1 = self.wd[:, first]
+        wwall = np.minimum(60.0 * nu / (_BET1 * d1 * d1), 1.0e12)
+        T[0][:, dst] = (rho[:, first] * 1.0e-14)[:, None]
+        T[1][:, dst] = (rho[:, first] * wwall)[:, None]
+
+    def _turb_bc(self):
+        g, T = self.ng, self.Ut
+        nx, ny = self.ncx, self.ncy
+        for lo, hi, ax in (("imin", "imax", 1), ("jmin", "jmax", 2)):
+            if self.bc[lo] == "periodic":
+                if ax == 1:
+                    T[:, :g, :] = T[:, nx - 2 * g:nx - g, :]
+                    T[:, nx - g:, :] = T[:, g:2 * g, :]
+                else:
+                    T[:, :, :g] = T[:, :, ny - 2 * g:ny - g]
+                    T[:, :, ny - g:] = T[:, :, g:2 * g]
+                continue
+            for side in (lo, hi):
+                if self.bc[side] in ("noslip", "slipwall"):
+                    self._turb_wall(side)
+                elif side == "imin":
+                    T[:, :g, :] = T[:, g:g + 1, :]
+                elif side == "imax":
+                    T[:, nx - g:, :] = T[:, nx - g - 1:nx - g, :]
+                elif side == "jmin":
+                    T[:, :, :g] = T[:, :, g:g + 1]
+                elif side == "jmax":
+                    T[:, :, ny - g:] = T[:, :, ny - g - 1:ny - g]
+
+    def _turb_apply(self, Ut0, rhs, dt, ca, cb, cc):
+        """SSP-RK combine with point-implicit destruction (as the GPU solver)."""
+        ii, jj = self.ii, self.jj
+        rho, k, w = self._turb_prim()
+        bet = self._F1 * _BET1 + (1.0 - self._F1) * _BET2
+        num = (ca * Ut0[0][ii, jj] + cb * self.Ut[0][ii, jj]
+               + cc * dt * rhs[0][ii, jj])
+        self.Ut[0][ii, jj] = num / (1.0 + cc * dt * _BSTAR * w[ii, jj])
+        # omega destruction -beta*w^2 point-implicit: w/(1+dt*beta*w) inverts to
+        # 1/w_{n+1} = 1/w_n + dt*beta, i.e. exactly the analytic w0/(1+beta w0 t)
+        num = (ca * Ut0[1][ii, jj] + cb * self.Ut[1][ii, jj]
+               + cc * dt * rhs[1][ii, jj])
+        self.Ut[1][ii, jj] = num / (1.0 + cc * dt * bet[ii, jj] * w[ii, jj])
+        r = np.maximum(self.U[0], 1e-9)
+        self.Ut[0] = np.clip(self.Ut[0], r * 1e-14, r * 1e8)
+        self.Ut[1] = np.clip(self.Ut[1], r * 1e-3, r * 1e12)
+        self._turb_bc()
+
     def step(self, dt):
+        ii, jj = self.ii, self.jj
         U0 = self.U.copy()
+        Ut0 = self.Ut.copy() if self.turb else None
         self._apply_bc()
+        if self.turb:
+            self._update_mut()
         k1 = self._rhs(self.U)
-        self.U[:, self.ii, self.jj] = U0[:, self.ii, self.jj] + dt * k1[:, self.ii, self.jj]
+        kt1 = self._turb_rhs(self.Ut, self._Fim, self._Fjm) if self.turb else None
+        self.U[:, ii, jj] = U0[:, ii, jj] + dt * k1[:, ii, jj]
+        if self.turb:
+            self._turb_apply(Ut0, kt1, dt, 1.0, 0.0, 1.0)
         self._apply_bc()
+        if self.turb:
+            self._update_mut()
         k2 = self._rhs(self.U)
-        self.U[:, self.ii, self.jj] = (0.5 * U0[:, self.ii, self.jj]
-                                       + 0.5 * (self.U[:, self.ii, self.jj]
-                                                + dt * k2[:, self.ii, self.jj]))
+        kt2 = self._turb_rhs(self.Ut, self._Fim, self._Fjm) if self.turb else None
+        self.U[:, ii, jj] = (0.5 * U0[:, ii, jj]
+                             + 0.5 * (self.U[:, ii, jj] + dt * k2[:, ii, jj]))
+        if self.turb:
+            self._turb_apply(Ut0, kt2, dt, 0.5, 0.5, 0.5)
 
     def run(self, t_end, cfl=0.4, max_steps=200000):
         t = 0.0
