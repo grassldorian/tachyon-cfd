@@ -60,6 +60,13 @@ class CurvilinearEuler:
         self.Ut = None                                   # (2,ncx,ncy) rho*k,rho*w
         self.wd = None                                   # wall distance field
         self.Prt = 0.9
+        self.body_force = None                           # (fx, fy) per volume
+
+    def set_body_force(self, fx, fy=0.0):
+        """Constant volumetric momentum source (e.g. the mean pressure gradient
+        that drives a periodic channel: fx = rho u_tau^2 / h)."""
+        self.body_force = (float(fx), float(fy))
+        return self
 
     def set_viscous(self, mu, Pr=0.72, Rgas=287.0, mu_t=None):
         self.viscous = True
@@ -451,7 +458,34 @@ class CurvilinearEuler:
         div = np.zeros_like(U)
         div[:, 1:-1, :] += Fi[:, 1:, :] - Fi[:, :-1, :]
         div[:, :, 1:-1] += Fj[:, :, 1:] - Fj[:, :, :-1]
-        return -div / np.maximum(self.vol, 1e-30)
+        out = -div / np.maximum(self.vol, 1e-30)
+        if self.body_force is not None:                  # volumetric momentum src
+            fx, fy = self.body_force
+            out[1] += fx
+            out[2] += fy
+            out[3] += fx * u + fy * v
+        return out
+
+    def dt_field(self, cfl):
+        """Per-cell stable dt over the whole array (local time stepping: not
+        time accurate, but converges to the same steady state far faster since
+        tiny near-wall cells no longer throttle the entire domain)."""
+        rho, u, v, p = self.primitives()
+        rho = np.maximum(rho, 1e-9)
+        a = np.sqrt(self.gamma * np.maximum(p, 1e-9) / rho)
+        si = 0.5 * (np.hypot(self.Sxi[1:], self.Syi[1:])
+                    + np.hypot(self.Sxi[:-1], self.Syi[:-1]))
+        sj = 0.5 * (np.hypot(self.Sxj[:, 1:], self.Syj[:, 1:])
+                    + np.hypot(self.Sxj[:, :-1], self.Syj[:, :-1]))
+        vol = np.maximum(self.vol, 1e-30)
+        rad = (np.hypot(u, v) + a) * (si + sj)
+        dt = cfl * vol / np.maximum(rad, 1e-30)
+        if self.viscous:
+            mut = self.mu_t if self.mu_t is not None else 0.0
+            nu = (self.mu + mut) / rho
+            dtv = 0.25 * vol ** 2 / np.maximum(nu * (si * si + sj * sj), 1e-30)
+            dt = np.minimum(dt, dtv)
+        return dt
 
     def max_wave_dt(self, cfl):
         # only real cells constrain the step; ghost cells may be stale (e.g.
@@ -535,7 +569,10 @@ class CurvilinearEuler:
         self._turb_bc()
 
     def step(self, dt):
+        """dt may be a scalar (time accurate) or a per-cell field from
+        dt_field() (local time stepping, steady-state acceleration)."""
         ii, jj = self.ii, self.jj
+        dtl = dt[ii, jj] if np.ndim(dt) > 0 else dt
         U0 = self.U.copy()
         Ut0 = self.Ut.copy() if self.turb else None
         self._apply_bc()
@@ -543,18 +580,18 @@ class CurvilinearEuler:
             self._update_mut()
         k1 = self._rhs(self.U)
         kt1 = self._turb_rhs(self.Ut, self._Fim, self._Fjm) if self.turb else None
-        self.U[:, ii, jj] = U0[:, ii, jj] + dt * k1[:, ii, jj]
+        self.U[:, ii, jj] = U0[:, ii, jj] + dtl * k1[:, ii, jj]
         if self.turb:
-            self._turb_apply(Ut0, kt1, dt, 1.0, 0.0, 1.0)
+            self._turb_apply(Ut0, kt1, dtl, 1.0, 0.0, 1.0)
         self._apply_bc()
         if self.turb:
             self._update_mut()
         k2 = self._rhs(self.U)
         kt2 = self._turb_rhs(self.Ut, self._Fim, self._Fjm) if self.turb else None
         self.U[:, ii, jj] = (0.5 * U0[:, ii, jj]
-                             + 0.5 * (self.U[:, ii, jj] + dt * k2[:, ii, jj]))
+                             + 0.5 * (self.U[:, ii, jj] + dtl * k2[:, ii, jj]))
         if self.turb:
-            self._turb_apply(Ut0, kt2, dt, 0.5, 0.5, 0.5)
+            self._turb_apply(Ut0, kt2, dtl, 0.5, 0.5, 0.5)
 
     def run(self, t_end, cfl=0.4, max_steps=200000):
         t = 0.0
